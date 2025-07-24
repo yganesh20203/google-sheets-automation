@@ -97,7 +97,7 @@ def export_df_to_gsheet(spreadsheet, df_to_export, sheet_name):
         except gspread.WorksheetNotFound:
             worksheet = spreadsheet.add_worksheet(title=sheet_name, rows="1000", cols="50")
 
-        worksheet.clear()
+        worksheet.batch_clear(['A:M'])
         worksheet.update(export_data, 'A1', value_input_option='USER_ENTERED')
         print(f"✅ Successfully exported to worksheet: '{sheet_name}'")
     except Exception as e:
