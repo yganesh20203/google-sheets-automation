@@ -186,7 +186,7 @@ def main():
     summary_df = df[df['Current Flow'].isin(['Dummy Task', 'Reattempt', 'Transportation'])].pivot_table(index='Store_Name', columns='Current Flow', values='Item Gross Weight', aggfunc='sum', fill_value=0)
     summary_df = summary_df.reindex(columns=['Dummy Task', 'Reattempt', 'Transportation'], fill_value=0)
     summary_df['Grand Total'] = summary_df.sum(axis=1)
-    statuses_to_exclude = ['End', 'Delivery Field', 'Manager Verification','COD Reconcilation']
+    statuses_to_exclude = ['End', 'Delivery Field', 'Manager Verification','COD Reconcilation','Pending to Update End KM','SAP Order  Status Success','Trip Manifest','Trip Confirmation']
     summary_df['Critical order tonnage to be cleared'] = summary_df.index.map(df[(df['Int_order_date'] != today_str_format1) & (~df['Current Flow'].isin(statuses_to_exclude))].groupby('Store_Name')['Item Gross Weight'].sum()).fillna(0)
     summary_df['Critical order tonnage to be cleared DSD'] = summary_df.index.map(df[(df['Int_order_date'] != today_str_format1) & (df['Considered'] == 'Yes') & (~df['Load'].isin(['>100', 'Bulk'])) & (~df['Current Flow'].isin(statuses_to_exclude))].groupby('Store_Name')['Item Gross Weight'].sum()).fillna(0)
     three_days_ago = pd.to_datetime('today').normalize() - pd.Timedelta(days=3)
