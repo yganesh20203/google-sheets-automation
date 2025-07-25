@@ -191,6 +191,7 @@ def main():
     summary_df['Critical order tonnage to be cleared DSD'] = summary_df.index.map(df[(df['Int_order_date'] != today_str_format1) & (df['Considered'] == 'Yes') & (~df['Load'].isin(['>100', 'Bulk'])) & (df['Current Flow'].isin(statuses_to_keep))].groupby('Store_Name')['Item Gross Weight'].sum()).fillna(0)
     three_days_ago = pd.to_datetime('today').normalize() - pd.Timedelta(days=3)
     df['temp_order_date_dt'] = pd.to_datetime(df['Int_order_date'], format='%m/%d/%Y', errors='coerce')
+    statuses_to_exclude =['End', 'Delivery Field', 'Manager Verification','COD Reconcilation']
     old_orders_df = df[(df['temp_order_date_dt'] < three_days_ago) & (~df['Current Flow'].isin(statuses_to_exclude)) & (df['Mode of Fullfillment'] == 'DSD')]
     old_orders_count = old_orders_df.groupby('Store_Name')['Reference Number'].nunique()
     summary_df['Orders Older Than 3 Days'] = summary_df.index.map(old_orders_count).fillna(0).astype(int)
