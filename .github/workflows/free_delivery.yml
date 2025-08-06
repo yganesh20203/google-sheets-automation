@@ -40,11 +40,11 @@ jobs:
 
       # Step 3: Install the required Python libraries
       # This step uses pip to install all the dependencies your script needs.
-      # It's crucial that this list matches the imports in your Python script.
+      # The problematic 'google-colab' library and its dependencies have been removed.
       - name: Install Python dependencies
         run: |
           pip install --upgrade pip
-          pip install google-colab gspread oauth2client pandas openpyxl google-api-python-client google-auth-httplib2 google-auth-oauthlib
+          pip install pandas openpyxl google-api-python-client google-auth-httplib2 google-auth-oauthlib
 
       # Step 4: Run the Python script for data processing
       # This is the final step where your actual script is executed.
