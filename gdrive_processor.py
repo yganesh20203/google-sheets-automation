@@ -95,12 +95,14 @@ def upload_file_to_drive(service, folder_id, data_to_upload, file_name, mime_typ
     """Uploads or updates a file in Google Drive."""
     print(f"Uploading '{file_name}' to Google Drive...")
     
-    # Create an in-memory file-like object from the string data
-    media_body = io.BytesIO(data_to_upload.encode('utf-8'))
-    media = MediaFileUpload(None, mimetype=mime_type, chunksize=1024*1024, resumable=True)
-    media.stream = lambda: media_body
+    # FIX: Write data to a temporary local file to provide a valid path to MediaFileUpload.
+    local_temp_path = f"temp_{file_name}"
+    with open(local_temp_path, 'w', encoding='utf-8') as f:
+        f.write(data_to_upload)
 
     try:
+        # Initialize MediaFileUpload with the path to the temporary file.
+        media = MediaFileUpload(local_temp_path, mimetype=mime_type, resumable=True)
         file_metadata = {'name': file_name}
 
         if existing_file_id:
@@ -116,6 +118,10 @@ def upload_file_to_drive(service, folder_id, data_to_upload, file_name, mime_typ
         print(f"Upload successful. New File ID: {file.get('id')}")
     except Exception as e:
         print(f"An error occurred during upload: {e}")
+    finally:
+        # Clean up the local temporary file after upload attempt.
+        if os.path.exists(local_temp_path):
+            os.remove(local_temp_path)
 
 
 def process_int_order(row):
@@ -159,8 +165,7 @@ def main():
     
     breach_lookup = merged_breach_df[['Order_ID', 'Int_Delivery_Date']].copy()
 
-    # FIX: Ensure both merge keys are the same data type (int64) to prevent ValueError.
-    # 'coerce' will turn any non-numeric values into NaN, which won't match and will be ignored.
+    # Ensure both merge keys are the same data type (int64) to prevent ValueError.
     capacity_df['Int_order'] = pd.to_numeric(capacity_df['Int_order'], errors='coerce').astype('Int64')
     breach_lookup['Order_ID'] = pd.to_numeric(breach_lookup['Order_ID'], errors='coerce').astype('Int64')
 
@@ -184,7 +189,7 @@ def main():
     
     if vd_raw_content and vd_raw_content.getbuffer().nbytes > 0:
         print("Reading existing data to handle duplicates.")
-        existing_df = pd.read_csv(vd_raw_content, sep='\t')
+        existing_df = pd.read_csv(vd_raw_content, sep='\t', low_memory=False)
         combined_df = pd.concat([existing_df, valid_dates_df], ignore_index=True)
     else:
         print(f"'{DRIVE_FILENAMES['vd_raw_file']}' not found or is empty. A new file will be created/overwritten.")
