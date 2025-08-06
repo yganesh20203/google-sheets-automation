@@ -95,13 +95,12 @@ def upload_file_to_drive(service, folder_id, data_to_upload, file_name, mime_typ
     """Uploads or updates a file in Google Drive."""
     print(f"Uploading '{file_name}' to Google Drive...")
     
-    # Save the data to a temporary local file before uploading
-    local_temp_path = f"temp_{file_name}"
-    with open(local_temp_path, 'w') as f:
-        f.write(data_to_upload)
+    # Create an in-memory file-like object from the string data
+    media_body = io.BytesIO(data_to_upload.encode('utf-8'))
+    media = MediaFileUpload(None, mimetype=mime_type, chunksize=1024*1024, resumable=True)
+    media.stream = lambda: media_body
 
     try:
-        media = MediaFileUpload(local_temp_path, mimetype=mime_type, resumable=True)
         file_metadata = {'name': file_name}
 
         if existing_file_id:
@@ -117,10 +116,7 @@ def upload_file_to_drive(service, folder_id, data_to_upload, file_name, mime_typ
         print(f"Upload successful. New File ID: {file.get('id')}")
     except Exception as e:
         print(f"An error occurred during upload: {e}")
-    finally:
-        # Clean up the local temporary file
-        if os.path.exists(local_temp_path):
-            os.remove(local_temp_path)
+
 
 def process_int_order(row):
     """Calculates the value for the 'Int_order' column."""
@@ -153,8 +149,9 @@ def main():
 
     # Load data into pandas from in-memory content
     print("\n--- Loading data into pandas DataFrames ---")
-    capacity_df = pd.read_csv(capacity_content)
-    merged_breach_df = pd.read_csv(merged_breach_content)
+    # FIX: Added low_memory=False to suppress DtypeWarning for large files.
+    capacity_df = pd.read_csv(capacity_content, low_memory=False)
+    merged_breach_df = pd.read_csv(merged_breach_content, low_memory=False)
 
     # --- Data Processing (Identical to previous version) ---
     print("\n--- Starting data processing on Capacity_dump.csv ---")
@@ -177,12 +174,14 @@ def main():
     print("\n--- Handling duplicates with existing VD_raw_file.txt ---")
     vd_raw_content, vd_raw_file_id = find_and_download_file(drive_service, DRIVE_FOLDER_ID, DRIVE_FILENAMES["vd_raw_file"])
     
-    if vd_raw_content:
+    # FIX: Check if the downloaded file content is not None AND has a size greater than 0.
+    # This prevents the EmptyDataError when the file exists but is empty.
+    if vd_raw_content and vd_raw_content.getbuffer().nbytes > 0:
         print("Reading existing data to handle duplicates.")
         existing_df = pd.read_csv(vd_raw_content, sep='\t')
         combined_df = pd.concat([existing_df, valid_dates_df], ignore_index=True)
     else:
-        print("VD_raw_file.txt not found. A new file will be created.")
+        print(f"'{DRIVE_FILENAMES['vd_raw_file']}' not found or is empty. A new file will be created/overwritten.")
         combined_df = valid_dates_df
 
     # Remove duplicate rows, keeping the last (most recent) entry
