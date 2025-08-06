@@ -149,16 +149,24 @@ def main():
 
     # Load data into pandas from in-memory content
     print("\n--- Loading data into pandas DataFrames ---")
-    # FIX: Added low_memory=False to suppress DtypeWarning for large files.
     capacity_df = pd.read_csv(capacity_content, low_memory=False)
     merged_breach_df = pd.read_csv(merged_breach_content, low_memory=False)
 
-    # --- Data Processing (Identical to previous version) ---
+    # --- Data Processing ---
     print("\n--- Starting data processing on Capacity_dump.csv ---")
     capacity_df['Length'] = capacity_df['Hybris Order Number'].astype(str).str.len()
     capacity_df['Int_order'] = capacity_df.apply(process_int_order, axis=1)
+    
     breach_lookup = merged_breach_df[['Order_ID', 'Int_Delivery_Date']].copy()
+
+    # FIX: Ensure both merge keys are the same data type (int64) to prevent ValueError.
+    # 'coerce' will turn any non-numeric values into NaN, which won't match and will be ignored.
+    capacity_df['Int_order'] = pd.to_numeric(capacity_df['Int_order'], errors='coerce').astype('Int64')
+    breach_lookup['Order_ID'] = pd.to_numeric(breach_lookup['Order_ID'], errors='coerce').astype('Int64')
+
+    # Now the merge can be performed safely.
     capacity_df = pd.merge(capacity_df, breach_lookup, left_on='Int_order', right_on='Order_ID', how='left')
+    
     capacity_df.rename(columns={'Int_Delivery_Date': 'Merged_match'}, inplace=True)
     capacity_df.drop('Order_ID', axis=1, inplace=True, errors='ignore')
     capacity_df['Int_delivery_date'] = capacity_df['Delivery Success Timestamp'].astype(str).str[:11].replace('nan', np.nan)
@@ -174,8 +182,6 @@ def main():
     print("\n--- Handling duplicates with existing VD_raw_file.txt ---")
     vd_raw_content, vd_raw_file_id = find_and_download_file(drive_service, DRIVE_FOLDER_ID, DRIVE_FILENAMES["vd_raw_file"])
     
-    # FIX: Check if the downloaded file content is not None AND has a size greater than 0.
-    # This prevents the EmptyDataError when the file exists but is empty.
     if vd_raw_content and vd_raw_content.getbuffer().nbytes > 0:
         print("Reading existing data to handle duplicates.")
         existing_df = pd.read_csv(vd_raw_content, sep='\t')
@@ -198,7 +204,7 @@ def main():
         data_to_upload=final_data_string,
         file_name=DRIVE_FILENAMES["vd_raw_file"],
         mime_type='text/plain',
-        existing_file_id=vd_raw_file_id  # Pass ID to update file, or None to create
+        existing_file_id=vd_raw_file_id
     )
     
     print(f"\nProcess finished successfully!")
