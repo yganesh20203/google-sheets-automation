@@ -95,7 +95,7 @@ def upload_file_to_drive(service, folder_id, data_to_upload, file_name, mime_typ
     """Uploads or updates a file in Google Drive."""
     print(f"Uploading '{file_name}' to Google Drive...")
     
-    # FIX: Write data to a temporary local file to provide a valid path to MediaFileUpload.
+    # Write data to a temporary local file to provide a valid path to MediaFileUpload.
     local_temp_path = f"temp_{file_name}"
     with open(local_temp_path, 'w', encoding='utf-8') as f:
         f.write(data_to_upload)
@@ -187,9 +187,18 @@ def main():
     print("\n--- Handling duplicates with existing VD_raw_file.txt ---")
     vd_raw_content, vd_raw_file_id = find_and_download_file(drive_service, DRIVE_FOLDER_ID, DRIVE_FILENAMES["vd_raw_file"])
     
+    # Define the master list of columns from the newly processed data.
+    # This will be the standard for the final output file.
+    master_columns = valid_dates_df.columns.tolist()
+
     if vd_raw_content and vd_raw_content.getbuffer().nbytes > 0:
         print("Reading existing data to handle duplicates.")
         existing_df = pd.read_csv(vd_raw_content, sep='\t', low_memory=False)
+        
+        # FIX: Reindex the existing data to match the column order and set of the new data.
+        # This adds any new columns (as NaN) and drops any obsolete ones, preventing misalignment.
+        existing_df = existing_df.reindex(columns=master_columns)
+        
         combined_df = pd.concat([existing_df, valid_dates_df], ignore_index=True)
     else:
         print(f"'{DRIVE_FILENAMES['vd_raw_file']}' not found or is empty. A new file will be created/overwritten.")
@@ -197,6 +206,10 @@ def main():
 
     # Remove duplicate rows, keeping the last (most recent) entry
     final_df = combined_df.drop_duplicates(keep='last')
+    
+    # FIX: Ensure the final DataFrame strictly follows the master column order before saving.
+    final_df = final_df[master_columns]
+    
     print(f"Combined data has {len(final_df)} unique rows after deduplication.")
 
     # Convert final DataFrame to a string to be uploaded
