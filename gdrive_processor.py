@@ -183,42 +183,20 @@ def main():
     valid_dates_df = valid_dates_df[pd.to_datetime(valid_dates_df['Final Delivery date'], errors='coerce').notna()]
     print(f"Found {len(valid_dates_df)} new rows with valid delivery dates.")
 
-    # This is the new, processed data. It is the source of truth.
-    new_data_df = valid_dates_df
-
     # Handle duplicates by downloading and merging with the existing VD_raw_file.txt
     print("\n--- Handling duplicates with existing VD_raw_file.txt ---")
     vd_raw_content, vd_raw_file_id = find_and_download_file(drive_service, DRIVE_FOLDER_ID, DRIVE_FILENAMES["vd_raw_file"])
     
     if vd_raw_content and vd_raw_content.getbuffer().nbytes > 0:
         print("Reading existing data to handle duplicates.")
-        # FIX: Read all columns as strings to prevent type conflicts.
-        existing_df = pd.read_csv(vd_raw_content, sep='\t', low_memory=False, dtype=str)
-        new_data_df = new_data_df.astype(str) # Ensure new data is also string for comparison
-
-        unique_key = 'Hybris Order Number'
-        
-        if unique_key not in existing_df.columns:
-            print(f"WARNING: Unique key '{unique_key}' not found in existing file. Overwriting with new data.")
-            final_df = new_data_df
-        else:
-            # Get the list of identifiers from the new data.
-            identifiers_in_new_data = new_data_df[unique_key].unique()
-
-            # FIX: Prioritize new data. Remove any rows from the old file that are being updated.
-            print(f"Removing old records that are present in the new data batch.")
-            old_data_to_keep = existing_df[~existing_df[unique_key].isin(identifiers_in_new_data)]
-
-            # Combine the records from the old file that were NOT updated with ALL of the new data.
-            print(f"Combining {len(old_data_to_keep)} old records with {len(new_data_df)} new records.")
-            final_df = pd.concat([old_data_to_keep, new_data_df], ignore_index=True)
+        existing_df = pd.read_csv(vd_raw_content, sep='\t', low_memory=False)
+        combined_df = pd.concat([existing_df, valid_dates_df], ignore_index=True)
     else:
         print(f"'{DRIVE_FILENAMES['vd_raw_file']}' not found or is empty. A new file will be created/overwritten.")
-        final_df = new_data_df
+        combined_df = valid_dates_df
 
-    # As a final safety measure, drop any remaining duplicates based on the unique key.
-    final_df = final_df.drop_duplicates(subset=['Hybris Order Number'], keep='last')
-    
+    # Remove duplicate rows, keeping the last (most recent) entry
+    final_df = combined_df.drop_duplicates(keep='last')
     print(f"Combined data has {len(final_df)} unique rows after deduplication.")
 
     # Convert final DataFrame to a string to be uploaded
