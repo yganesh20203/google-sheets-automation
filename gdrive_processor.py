@@ -129,15 +129,18 @@ def process_int_order(row):
     # Ensure input is a string
     order_num_str = str(row['Hybris Order Number'])
     
-    # FIX: Clean the string robustly: remove quotes (single and double), equals signs, and leading/trailing whitespace
+    # Clean the string robustly: remove quotes (single and double), equals signs, and leading/trailing whitespace
     cleaned_str = order_num_str.replace('"', '').replace("'", "").replace("=", "").strip()
     
     # Check length and process
     length = len(cleaned_str)
     try:
-        # We only care about lengths 10 and 16 as per the original requirement
-        if length == 10 or length == 16:
+        # If length is 8 or 10, convert to integer
+        if length == 8 or length == 10:
             return int(cleaned_str)
+        # If length is 16, return as text
+        elif length == 16:
+            return cleaned_str
         else:
             # For any other length, ignore by placing 0
             return 0
@@ -172,15 +175,14 @@ def main():
     
     breach_lookup = merged_breach_df[['Order_ID', 'Int_Delivery_Date']].copy()
 
-    # FIX: Clean the 'Order_ID' in the breach report in the same way as 'Hybris Order Number'
-    # to ensure the keys can be matched reliably.
+    # Clean the 'Order_ID' in the breach report
     breach_lookup['Order_ID'] = breach_lookup['Order_ID'].astype(str).str.replace('"', '').str.replace("'", "").str.replace("=", "").str.strip()
 
-    # Ensure both merge keys are the same numeric data type (Int64) to prevent ValueError.
-    capacity_df['Int_order'] = pd.to_numeric(capacity_df['Int_order'], errors='coerce').astype('Int64')
-    breach_lookup['Order_ID'] = pd.to_numeric(breach_lookup['Order_ID'], errors='coerce').astype('Int64')
+    # Ensure both merge keys are strings (object type) to allow merging mixed types (int and str).
+    capacity_df['Int_order'] = capacity_df['Int_order'].astype(str)
+    breach_lookup['Order_ID'] = breach_lookup['Order_ID'].astype(str)
 
-    # Now the merge can be performed safely.
+    # Now the merge can be performed safely on string columns.
     capacity_df = pd.merge(capacity_df, breach_lookup, left_on='Int_order', right_on='Order_ID', how='left')
     
     capacity_df.rename(columns={'Int_Delivery_Date': 'Merged_match'}, inplace=True)
@@ -215,8 +217,8 @@ def main():
         print(f"'{DRIVE_FILENAMES['vd_raw_file']}' not found or is empty. A new file will be created/overwritten.")
         combined_df = valid_dates_df
 
-    # Drop duplicates based on a unique identifier to ensure the latest data is kept.
-    final_df = combined_df.drop_duplicates(subset=['Hybris Order Number'], keep='last')
+    # FIX: Drop duplicates only if the entire row is identical.
+    final_df = combined_df.drop_duplicates(keep='last')
     
     # Ensure the final DataFrame strictly follows the master column order before saving to prevent jumbling.
     final_df = final_df[master_columns]
