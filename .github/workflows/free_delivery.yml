@@ -1,0 +1,59 @@
+# .github/workflows/process-gdrive-data.yml
+
+# Name of the GitHub Actions workflow. This is what you'll see in the Actions tab.
+name: Process Google Drive Data Daily
+
+# --- Triggers for the workflow ---
+on:
+  schedule:
+    # This is a cron schedule that runs the workflow every day.
+    # The time is in UTC. '15 5 * * *' corresponds to 10:45 AM IST.
+    # You can adjust this time as needed.
+    - cron: '15 5 * * *'
+  
+  workflow_dispatch:
+    # This line allows you to manually trigger the workflow from the GitHub UI.
+    # It's useful for testing or running the process on demand.
+
+# --- Definition of the jobs to be run ---
+jobs:
+  run-gdrive-processor:
+    # The name of the job.
+    name: Run GDrive Data Processing Script
+    
+    # Specifies the type of machine to run the job on. 'ubuntu-latest' is a standard choice.
+    runs-on: ubuntu-latest
+    
+    # --- Sequence of steps to execute in this job ---
+    steps:
+      # Step 1: Check out your repository's code
+      # This action downloads your code (including the Python script) into the runner.
+      - name: Checkout repository code
+        uses: actions/checkout@v4
+
+      # Step 2: Set up the Python environment
+      # This action installs a specific version of Python on the runner.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10' # Specifies Python version 3.10
+
+      # Step 3: Install the required Python libraries
+      # This step uses pip to install all the dependencies your script needs.
+      # It's crucial that this list matches the imports in your Python script.
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install google-colab gspread oauth2client pandas openpyxl google-api-python-client google-auth-httplib2 google-auth-oauthlib
+
+      # Step 4: Run the Python script for data processing
+      # This is the final step where your actual script is executed.
+      - name: Run the GDrive processing script
+        env:
+          # IMPORTANT: You must create a secret in your GitHub repository named 'GCP_SA_KEY'.
+          # This secret should contain the JSON key for your Google Cloud Service Account.
+          # This is a secure way to provide credentials to your script.
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+        # The command to run your script. Make sure the filename matches.
+        # The file name in the canvas is 'gdrive_data_processing.py', so we use that here.
+        run: python gdrive_data_processing.py
