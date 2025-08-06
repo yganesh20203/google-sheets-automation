@@ -126,16 +126,23 @@ def upload_file_to_drive(service, folder_id, data_to_upload, file_name, mime_typ
 
 def process_int_order(row):
     """Calculates the value for the 'Int_order' column."""
+    # Ensure input is a string
     order_num_str = str(row['Hybris Order Number'])
-    length = len(order_num_str)
+    
+    # FIX: Clean the string robustly: remove quotes (single and double), equals signs, and leading/trailing whitespace
+    cleaned_str = order_num_str.replace('"', '').replace("'", "").replace("=", "").strip()
+    
+    # Check length and process
+    length = len(cleaned_str)
     try:
-        if length == 10:
-            return int(order_num_str)
-        elif length == 16:
-            return int(order_num_str.replace('"', ''))
+        # We only care about lengths 10 and 16 as per the original requirement
+        if length == 10 or length == 16:
+            return int(cleaned_str)
         else:
+            # For any other length, ignore by placing 0
             return 0
     except (ValueError, TypeError):
+        # Handle cases where conversion to int fails even after cleaning
         return 0
 
 def main():
@@ -165,7 +172,11 @@ def main():
     
     breach_lookup = merged_breach_df[['Order_ID', 'Int_Delivery_Date']].copy()
 
-    # Ensure both merge keys are the same data type (int64) to prevent ValueError.
+    # FIX: Clean the 'Order_ID' in the breach report in the same way as 'Hybris Order Number'
+    # to ensure the keys can be matched reliably.
+    breach_lookup['Order_ID'] = breach_lookup['Order_ID'].astype(str).str.replace('"', '').str.replace("'", "").str.replace("=", "").str.strip()
+
+    # Ensure both merge keys are the same numeric data type (Int64) to prevent ValueError.
     capacity_df['Int_order'] = pd.to_numeric(capacity_df['Int_order'], errors='coerce').astype('Int64')
     breach_lookup['Order_ID'] = pd.to_numeric(breach_lookup['Order_ID'], errors='coerce').astype('Int64')
 
@@ -187,16 +198,29 @@ def main():
     print("\n--- Handling duplicates with existing VD_raw_file.txt ---")
     vd_raw_content, vd_raw_file_id = find_and_download_file(drive_service, DRIVE_FOLDER_ID, DRIVE_FILENAMES["vd_raw_file"])
     
+    # Define the master list of columns from the newly processed data.
+    # This will be the standard for the final output file.
+    master_columns = valid_dates_df.columns.tolist()
+
     if vd_raw_content and vd_raw_content.getbuffer().nbytes > 0:
         print("Reading existing data to handle duplicates.")
         existing_df = pd.read_csv(vd_raw_content, sep='\t', low_memory=False)
+        
+        # Reindex the existing data to match the column order and set of the new data.
+        # This adds any new columns (like Length, Int_order) as NaN and drops any obsolete ones.
+        existing_df = existing_df.reindex(columns=master_columns)
+        
         combined_df = pd.concat([existing_df, valid_dates_df], ignore_index=True)
     else:
         print(f"'{DRIVE_FILENAMES['vd_raw_file']}' not found or is empty. A new file will be created/overwritten.")
         combined_df = valid_dates_df
 
-    # Remove duplicate rows, keeping the last (most recent) entry
-    final_df = combined_df.drop_duplicates(keep='last')
+    # Drop duplicates based on a unique identifier to ensure the latest data is kept.
+    final_df = combined_df.drop_duplicates(subset=['Hybris Order Number'], keep='last')
+    
+    # Ensure the final DataFrame strictly follows the master column order before saving to prevent jumbling.
+    final_df = final_df[master_columns]
+    
     print(f"Combined data has {len(final_df)} unique rows after deduplication.")
 
     # Convert final DataFrame to a string to be uploaded
