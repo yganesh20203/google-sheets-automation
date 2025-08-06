@@ -56,4 +56,4 @@ jobs:
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
         # The command to run your script. Make sure the filename matches.
         # The file name in the canvas is 'gdrive_data_processing.py', so we use that here.
-        run: python gdrive_data_processing.py
+        run: python free_delivery.py
