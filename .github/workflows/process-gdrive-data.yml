@@ -1,0 +1,32 @@
+
+# .github/workflows/process-gdrive-data.yml
+
+name: Process GDrive Data
+
+on:
+  schedule:
+    # Runs at 10:45 AM IST (which is 05:15 UTC) every day.
+    # I've offset this by 15 minutes from your other job to avoid overlap.
+    - cron: '15 5 * * *'
+  workflow_dispatch: # Allows you to manually run the workflow from the Actions tab
+
+jobs:
+  run-gdrive-processor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Python dependencies
+        run: |
+          pip install pandas numpy gdown
+
+      - name: Run the GDrive processing script
+        # This command runs the new script.
+        # Make sure you have saved the Python code to a file named 'gdrive_processor.py'
+        run: python gdrive_processor.py
