@@ -195,7 +195,7 @@ def main():
     df.drop(columns=['temp_order_date_dt'], inplace=True)
     df['Int_LR_date_dt'] = pd.to_datetime(df['Int_LR_date'], errors='coerce')
     if 'Vehicle Model' in df.columns:
-        vehicle_model_list_lower = [v.lower() for v in ['TATA 207/PICK UP', 'TATA ACE', 'PICKUP', 'APE / AUTO / 3 WHEELER', 'AUTO', 'ACE', 'DOST', 'Bolero', 'EICHER']]
+        vehicle_model_list_lower = [v.lower() for v in ['TATA 207/PICK UP', 'TATA ACE', 'PICKUP', 'APE / AUTO / 3 WHEELER', 'AUTO', 'ACE', 'DOST', 'Bolero']]
         three_days_ago_lr = pd.to_datetime('today').normalize() - pd.Timedelta(days=2)
         filtered_avg_df = df[(df['Current Flow'].isin(['End', 'Delivery Field', 'SAP Order Status Success'])) & (df.get('Prev Status') != 'handover_to_member') & (df['Vehicle Model'].str.lower().fillna('').isin(vehicle_model_list_lower)) & (df['Int_LR_date_dt'] >= three_days_ago_lr)]
         avg_tonnage = filtered_avg_df.groupby('Store_Name')['Item Gross Weight'].sum() / 3
