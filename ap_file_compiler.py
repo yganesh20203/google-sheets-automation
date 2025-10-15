@@ -8,6 +8,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
+import zipfile # <-- New import for zipping files
 
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
@@ -55,7 +56,6 @@ def download_ap_files(service):
 
     # 2. Find the 'AP files' subfolder within the daily folder
     print("Searching for 'AP files' subfolder...")
-    # CORRECTED LINE: Removed single quotes around 'name'
     query = f"name = 'AP files' and '{daily_folder_id}' in parents and mimeType='application/vnd.google-apps.folder'"
     results = service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
     ap_folders = results.get('files', [])
@@ -185,21 +185,29 @@ def main():
         print(f"✅ Successfully created report file: {output_filename}")
         print("-" * 50)
 
-        # --- 5. Email the Report ---
-        print("--- 4. Emailing Report ---")
+        # --- 5. Compress the Excel File into a Zip Archive ---
+        zip_filename = f'AP_Merged_Report_{today_str}.zip'
+        print(f"Compressing report into '{zip_filename}'...")
+        with zipfile.ZipFile(zip_filename, 'w', compression=zipfile.ZIP_DEFLATED) as zipf:
+            zipf.write(output_filename, arcname=os.path.basename(output_filename))
+        print("✅ Compression successful.")
+        print("-" * 50)
+        
+        # --- 6. Email the Zipped Report ---
+        print("--- 6. Emailing Report ---")
         sender_email = os.getenv("SENDER_EMAIL")
         sender_password = os.getenv("SENDER_APP_PASSWORD")
 
         if not sender_email or not sender_password:
             raise ValueError("SENDER_EMAIL or SENDER_APP_PASSWORD secrets not found.")
 
-        # Using a timezone-aware timestamp for the email subject
         ist = timezone(timedelta(hours=5, minutes=30))
         email_timestamp = datetime.now(ist).strftime('%d-%b-%Y %I:%M %p')
         email_subject = f"Daily AP Merged Report - {email_timestamp}"
-        email_body = "Please find the attached daily AP Merged Report.\n\nThis email was sent automatically by a GitHub Actions script."
+        email_body = "Please find the attached daily AP Merged Report (zipped).\n\nThis email was sent automatically by a GitHub Actions script."
 
-        send_email_with_attachment(sender_email, sender_password, RECIPIENT_EMAIL, email_subject, email_body, output_filename)
+        # Pass the ZIP file path to the email function
+        send_email_with_attachment(sender_email, sender_password, RECIPIENT_EMAIL, email_subject, email_body, zip_filename)
 
     except KeyError as e:
         print(f"❌ CRITICAL ERROR: A required column ({e}) was not found. Aborting pivot creation.")
