@@ -24,7 +24,7 @@ DRIVE_PARENT_FOLDER_ID = '1mBCJJ_7kTSMlNDj7mMxZ33hNeMykqKyR'
 DRIVE_OUTPUT_FOLDER_ID = '1zgkXizA77RfJ8XIAGYXcZa9BpvXPo0F0'
 
 # The email address to send the final report to.
-RECIPIENT_EMAIL = 'y.ganesh@flipkart.com' 
+RECIPIENT_EMAIL = 'kanakala.yoganand@flipkart.com' 
 
 # --- End of User Configuration ---
 
