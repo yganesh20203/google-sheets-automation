@@ -8,16 +8,20 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
-import zipfile # <-- New import for zipping files
+import zipfile
 
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
+from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 
 # --- 1. USER CONFIGURATION ---
 
 # The ID of the top-level folder containing the daily dated folders (e.g., "15th October...")
 DRIVE_PARENT_FOLDER_ID = '1mBCJJ_7kTSMlNDj7mMxZ33hNeMykqKyR'
+
+# **NEW**: Create a folder in Google Drive for the output reports and paste its ID here.
+# Make sure your service account has "Editor" access to this folder.
+DRIVE_OUTPUT_FOLDER_ID = '1zgkXizA77RfJ8XIAGYXcZa9BpvXPo0F0'
 
 # The email address to send the final report to.
 RECIPIENT_EMAIL = 'y.ganesh@flipkart.com' 
@@ -41,7 +45,6 @@ def download_ap_files(service):
     date_str = get_todays_date_string()
     print(f"Searching for parent folder containing '{date_str}'...")
 
-    # 1. Find the daily parent folder
     query = f"name contains '{date_str}' and '{DRIVE_PARENT_FOLDER_ID}' in parents and mimeType='application/vnd.google-apps.folder'"
     results = service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
     daily_folders = results.get('files', [])
@@ -54,7 +57,6 @@ def download_ap_files(service):
     daily_folder_name = daily_folders[0]['name']
     print(f"✅ Found daily folder: '{daily_folder_name}'")
 
-    # 2. Find the 'AP files' subfolder within the daily folder
     print("Searching for 'AP files' subfolder...")
     query = f"name = 'AP files' and '{daily_folder_id}' in parents and mimeType='application/vnd.google-apps.folder'"
     results = service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
@@ -67,7 +69,6 @@ def download_ap_files(service):
     ap_folder_id = ap_folders[0]['id']
     print("✅ Found 'AP files' subfolder.")
 
-    # 3. List and download all XLSX files from the 'AP files' subfolder
     print("Listing and downloading all .xlsx files...")
     query = f"mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' and '{ap_folder_id}' in parents"
     results = service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
@@ -98,9 +99,37 @@ def download_ap_files(service):
 
     return all_dataframes
 
-def send_email_with_attachment(sender_email, sender_password, recipient_email, subject, body, file_path):
-    """Sends an email with a file attachment using SMTP."""
-    print("Preparing to send email report...")
+def upload_file_and_get_link(service, local_path, folder_id):
+    """Uploads a file to Drive, makes it public, and returns the link."""
+    print(f"Uploading '{os.path.basename(local_path)}' to Google Drive...")
+    file_metadata = {'name': os.path.basename(local_path), 'parents': [folder_id]}
+    media = MediaFileUpload(local_path, resumable=True)
+    
+    # Check if file already exists to overwrite it.
+    query = f"name = '{os.path.basename(local_path)}' and '{folder_id}' in parents and trashed=false"
+    response = service.files().list(q=query, spaces='drive', fields='files(id)').execute()
+    files = response.get('files', [])
+
+    if files:
+        file_id = files[0].get('id')
+        updated_file = service.files().update(fileId=file_id, media_body=media, fields='id, webViewLink').execute()
+        print("✅ File updated.")
+        file_link = updated_file.get('webViewLink')
+    else:
+        file = service.files().create(body=file_metadata, media_body=media, fields='id, webViewLink').execute()
+        file_id = file.get('id')
+        print("✅ File uploaded.")
+        file_link = file.get('webViewLink')
+
+    print("Setting public permissions...")
+    permission = {'type': 'anyone', 'role': 'reader'}
+    service.permissions().create(fileId=file_id, body=permission).execute()
+    print("✅ Permissions set. Anyone with the link can view.")
+    return file_link
+
+def send_email_notification(sender_email, sender_password, recipient_email, subject, body):
+    """Sends an email notification without an attachment."""
+    print("Preparing to send email notification...")
     try:
         msg = MIMEMultipart()
         msg['From'] = sender_email
@@ -108,26 +137,21 @@ def send_email_with_attachment(sender_email, sender_password, recipient_email, s
         msg['Subject'] = subject
         msg.attach(MIMEText(body, 'plain'))
 
-        with open(file_path, 'rb') as attachment:
-            part = MIMEBase('application', 'octet-stream')
-            part.set_payload(attachment.read())
-        encoders.encode_base64(part)
-        part.add_header('Content-Disposition', f"attachment; filename= {os.path.basename(file_path)}")
-        msg.attach(part)
-
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(sender_email, sender_password)
         text = msg.as_string()
         server.sendmail(sender_email, recipient_email, text)
         server.quit()
-        print(f"✅ Email sent successfully to {recipient_email}")
+        print(f"✅ Email notification sent successfully to {recipient_email}")
     except Exception as e:
         print(f"❌ FAILED to send email: {e}")
 
 def main():
     """Main function to run the entire process."""
-    # --- 1. Authentication ---
+    if DRIVE_OUTPUT_FOLDER_ID == 'YOUR_OUTPUT_FOLDER_ID_HERE':
+        raise ValueError("Please update the 'DRIVE_OUTPUT_FOLDER_ID' in the script configuration.")
+
     print("--- 1. Authenticating with Google ---")
     creds_json_str = os.getenv("GCP_SA_KEY")
     if not creds_json_str:
@@ -139,7 +163,6 @@ def main():
     print("✅ Authentication successful.")
     print("-" * 50)
 
-    # --- 2. Download and Merge Files ---
     print("--- 2. Finding and Merging AP Files ---")
     list_of_dfs = download_ap_files(drive_service)
 
@@ -151,7 +174,6 @@ def main():
     print(f"✨ Merge complete! Total rows in raw data: {len(merged_df)}")
     print("-" * 50)
 
-    # --- 3. Pivot Table Creation ---
     print("--- 3. Creating Pivot Tables ---")
     try:
         merged_df['Invoice Scan Date'] = pd.to_datetime(merged_df['Invoice Scan Date'].astype(str).str.strip(), format='%d/%m/%Y', errors='coerce')
@@ -173,7 +195,6 @@ def main():
         pivot2.rename(columns={'Billing No': 'Distinct Count of Billing No'}, inplace=True)
         print("✅ Pivot Table 2 (by Store Code and Description) created.")
 
-        # --- 4. Save to Excel File ---
         today_str = datetime.now().strftime('%Y-%m-%d')
         output_filename = f'AP_Merged_Report_{today_str}.xlsx'
         
@@ -185,7 +206,6 @@ def main():
         print(f"✅ Successfully created report file: {output_filename}")
         print("-" * 50)
 
-        # --- 5. Compress the Excel File into a Zip Archive ---
         zip_filename = f'AP_Merged_Report_{today_str}.zip'
         print(f"Compressing report into '{zip_filename}'...")
         with zipfile.ZipFile(zip_filename, 'w', compression=zipfile.ZIP_DEFLATED) as zipf:
@@ -193,8 +213,11 @@ def main():
         print("✅ Compression successful.")
         print("-" * 50)
         
-        # --- 6. Email the Zipped Report ---
-        print("--- 6. Emailing Report ---")
+        print("--- 4. Uploading Report to Google Drive ---")
+        file_link = upload_file_and_get_link(drive_service, zip_filename, DRIVE_OUTPUT_FOLDER_ID)
+        print("-" * 50)
+
+        print("--- 5. Emailing Report Link ---")
         sender_email = os.getenv("SENDER_EMAIL")
         sender_password = os.getenv("SENDER_APP_PASSWORD")
 
@@ -204,10 +227,13 @@ def main():
         ist = timezone(timedelta(hours=5, minutes=30))
         email_timestamp = datetime.now(ist).strftime('%d-%b-%Y %I:%M %p')
         email_subject = f"Daily AP Merged Report - {email_timestamp}"
-        email_body = "Please find the attached daily AP Merged Report (zipped).\n\nThis email was sent automatically by a GitHub Actions script."
+        email_body = (
+            f"The daily AP Merged Report has been generated.\n\n"
+            f"You can download it using the following link:\n{file_link}\n\n"
+            "This email was sent automatically by a GitHub Actions script."
+        )
 
-        # Pass the ZIP file path to the email function
-        send_email_with_attachment(sender_email, sender_password, RECIPIENT_EMAIL, email_subject, email_body, zip_filename)
+        send_email_notification(sender_email, sender_password, RECIPIENT_EMAIL, email_subject, email_body)
 
     except KeyError as e:
         print(f"❌ CRITICAL ERROR: A required column ({e}) was not found. Aborting pivot creation.")
