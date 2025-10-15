@@ -8,8 +8,8 @@ import warnings
 from googleapiclient.discovery import build
 import io
 from googleapiclient.http import MediaIoBaseDownload
-import os  # <-- Add this import
-import json # <-- Add this import
+import os
+import json
 
 warnings.filterwarnings('ignore', category=pd.errors.SettingWithCopyWarning)
 
@@ -25,7 +25,6 @@ print("--- Script Started ---")
 
 def get_todays_folder_name():
     """Generates the folder name for the current date (e.g., '15th October')."""
-    # (This function and the others below remain unchanged)
     today = datetime.now()
     day = today.day
     if 4 <= day <= 20 or 24 <= day <= 30:
@@ -36,24 +35,27 @@ def get_todays_folder_name():
 
 def download_csv_from_drive(service, folder_id, folder_name, file_name):
     """Downloads a CSV file from a specific folder in Google Drive."""
-    # (This function and the others below remain unchanged)
-    query = f"name='{folder_name}' and '{folder_id}' in parents and mimeType='application/vnd.google-apps.folder'"
+    # Search for the folder that CONTAINS the date string
+    print(f"Searching for folder containing '{folder_name}'...")
+    query = f"name contains '{folder_name}' and '{folder_id}' in parents and mimeType='application/vnd.google-apps.folder'"
     results = service.files().list(q=query, spaces='drive', fields='nextPageToken, files(id, name)').execute()
     items = results.get('files', [])
 
     if not items:
-        print(f"ERROR: Folder '{folder_name}' not found.")
+        print(f"ERROR: Folder containing '{folder_name}' not found.")
         return None
     
+    found_folder_name = items[0]['name']
     todays_folder_id = items[0]['id']
-    print(f"Found folder: '{folder_name}' with ID: {todays_folder_id}")
+    print(f"Found folder: '{found_folder_name}' with ID: {todays_folder_id}")
 
+    # Search for the file in the found folder
     query = f"name='{file_name}' and '{todays_folder_id}' in parents"
     results = service.files().list(q=query, spaces='drive', fields='nextPageToken, files(id, name)').execute()
     items = results.get('files', [])
 
     if not items:
-        print(f"ERROR: File '{file_name}' not found in folder '{folder_name}'.")
+        print(f"ERROR: File '{file_name}' not found in folder '{found_folder_name}'.")
         return None
 
     file_id = items[0]['id']
@@ -72,7 +74,6 @@ def download_csv_from_drive(service, folder_id, folder_name, file_name):
 
 # --- Main Script ---
 try:
-    # --- THIS IS THE UPDATED AUTHENTICATION BLOCK ---
     print("Step 1: Authenticating and setting up services...")
     creds_json_str = os.getenv("GCP_SA_KEY")
     if not creds_json_str:
@@ -85,12 +86,9 @@ try:
     drive_service = build('drive', 'v3', credentials=creds)
     spreadsheet = gc.open_by_url(G_SHEET_URL)
     print("Successfully authenticated and set up services.")
-    # --- END OF UPDATED BLOCK ---
     
-    # The rest of the script remains exactly the same...
     print("Step 2: Loading data from Google Drive...")
     todays_folder = get_todays_folder_name()
-    # (The rest of your code...)
     df = download_csv_from_drive(drive_service, DRIVE_FOLDER_ID, todays_folder, "Merged_Breach_Report.csv")
 
     if df is None:
@@ -157,7 +155,7 @@ try:
         print("Warning: No data available for pivot table after applying filters. An empty table will be uploaded.")
         pivot_table_to_export = pd.DataFrame(columns=['Date', 'Store_Name_PBI'])
 
-    print("Step 7: Connecting to Google Sheets and uploading data...")
+    print("Step 7: Uploading data to Google Sheets...")
     print(f"Writing raw data to '{RAW_DATA_SHEET_NAME}' sheet...")
     raw_data_ws = spreadsheet.worksheet(RAW_DATA_SHEET_NAME)
     raw_data_ws.clear()
@@ -184,7 +182,9 @@ try:
 
     print("Step 8: Updating the 'View' sheet with the last updated timestamp...")
     view_ws = spreadsheet.worksheet(VIEW_SHEET_NAME)
-    update_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S IST')
+    # Using Asia/Kolkata for accurate timezone display
+    from datetime import timezone
+    update_time = datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime('%Y-%m-%d %H:%M:%S IST')
     view_ws.update_acell('B1', f"Last updated: {update_time}")
     print("Timestamp updated successfully.")
 
