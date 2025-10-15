@@ -1,0 +1,32 @@
+name: Compile and Email AP Files
+
+on:
+  schedule:
+    # Runs at 7:30 AM UTC (1:00 PM IST) every day from Monday to Saturday.
+    - cron: '30 7 * * 1-6'
+  workflow_dispatch: # Allows you to run the workflow manually
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+    - name: Run the AP file compiler script
+      env:
+        GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+        SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+        SENDER_APP_PASSWORD: ${{ secrets.SENDER_APP_PASSWORD }}
+      run: python ap_file_compiler.py
