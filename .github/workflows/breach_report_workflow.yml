@@ -26,7 +26,8 @@ jobs:
 
     - name: Create credentials file from Secret
       run: |
-        echo "${{ secrets.GDRIVE_API_CREDENTIALS }}" > credentials.json
+        # Use the correct secret name here
+        echo "${{ secrets.GCP_SA_KEY }}" > credentials.json
 
     - name: Run the breach report script
       run: python breach_report_processor.py
