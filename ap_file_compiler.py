@@ -19,7 +19,7 @@ from googleapiclient.http import MediaIoBaseDownload
 DRIVE_PARENT_FOLDER_ID = '1mBCJJ_7kTSMlNDj7mMxZ33hNeMykqKyR'
 
 # The email address to send the final report to.
-RECIPIENT_EMAIL = 'your_recipient_email@example.com' 
+RECIPIENT_EMAIL = 'y.ganesh@flipkart.com' 
 
 # --- End of User Configuration ---
 
