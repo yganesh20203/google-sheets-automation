@@ -24,10 +24,8 @@ jobs:
         python -m pip install --upgrade pip
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-    - name: Create credentials file from Secret
-      run: |
-        # Use the correct secret name here
-        echo "${{ secrets.GCP_SA_KEY }}" > credentials.json
-
+    # We no longer create a file. Instead, we run the script with the secret as an environment variable.
     - name: Run the breach report script
+      env:
+        GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }} # This makes the secret available to os.getenv()
       run: python breach_report_processor.py
