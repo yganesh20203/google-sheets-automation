@@ -12,7 +12,8 @@ from googleapiclient.http import MediaIoBaseDownload
 warnings.filterwarnings('ignore', category=pd.errors.SettingWithCopyWarning)
 
 # --- Configuration ---
-CREDS_PATH = r"C:\Users\y.ganesh\OneDrive - Flipkart Internet Pvt. Ltd\Desktop\Python\Test_file\credentials.json"
+# This path is now relative, so it works in GitHub Actions
+CREDS_PATH = "credentials.json"
 G_SHEET_URL = "https://docs.google.com/spreadsheets/d/1AHRKubx_Q-K8DR-86xVnEC_dUD94kcGwB1l3LguEYfk/edit?usp=sharing"
 RAW_DATA_SHEET_NAME = "raw_data"
 PIVOT_SHEET_NAME = "Pivot"
@@ -22,7 +23,7 @@ DRIVE_FOLDER_ID = "1mBCJJ_7kTSMlNDj7mMxZ33hNeMykqKyR"
 print("--- Script Started ---")
 
 def get_todays_folder_name():
-    """Generates the folder name for the current date (e.g., '14th October')."""
+    """Generates the folder name for the current date (e.g., '15th October')."""
     today = datetime.now()
     day = today.day
     if 4 <= day <= 20 or 24 <= day <= 30:
@@ -61,7 +62,7 @@ def download_csv_from_drive(service, folder_id, folder_name, file_name):
     fh = io.BytesIO()
     downloader = MediaIoBaseDownload(fh, request)
     done = False
-    while done is False:
+    while not done:
         status, done = downloader.next_chunk()
         print(f"Download {int(status.progress() * 100)}%.")
     
@@ -173,7 +174,8 @@ try:
 
     print("Step 8: Updating the 'View' sheet with the last updated timestamp...")
     view_ws = spreadsheet.worksheet(VIEW_SHEET_NAME)
-    view_ws.update_acell('B1', f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    update_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S IST')
+    view_ws.update_acell('B1', f"Last updated: {update_time}")
     print("Timestamp updated successfully.")
 
 except gspread.exceptions.SpreadsheetNotFound:
