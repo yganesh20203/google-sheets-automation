@@ -8,22 +8,24 @@ import warnings
 from googleapiclient.discovery import build
 import io
 from googleapiclient.http import MediaIoBaseDownload
+import os  # <-- Add this import
+import json # <-- Add this import
 
 warnings.filterwarnings('ignore', category=pd.errors.SettingWithCopyWarning)
 
 # --- Configuration ---
-# This path is now relative, so it works in GitHub Actions
-CREDS_PATH = "credentials.json"
 G_SHEET_URL = "https://docs.google.com/spreadsheets/d/1AHRKubx_Q-K8DR-86xVnEC_dUD94kcGwB1l3LguEYfk/edit?usp=sharing"
 RAW_DATA_SHEET_NAME = "raw_data"
 PIVOT_SHEET_NAME = "Pivot"
 VIEW_SHEET_NAME = "View"
 DRIVE_FOLDER_ID = "1mBCJJ_7kTSMlNDj7mMxZ33hNeMykqKyR"
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 
 print("--- Script Started ---")
 
 def get_todays_folder_name():
     """Generates the folder name for the current date (e.g., '15th October')."""
+    # (This function and the others below remain unchanged)
     today = datetime.now()
     day = today.day
     if 4 <= day <= 20 or 24 <= day <= 30:
@@ -34,7 +36,7 @@ def get_todays_folder_name():
 
 def download_csv_from_drive(service, folder_id, folder_name, file_name):
     """Downloads a CSV file from a specific folder in Google Drive."""
-    # Search for the folder
+    # (This function and the others below remain unchanged)
     query = f"name='{folder_name}' and '{folder_id}' in parents and mimeType='application/vnd.google-apps.folder'"
     results = service.files().list(q=query, spaces='drive', fields='nextPageToken, files(id, name)').execute()
     items = results.get('files', [])
@@ -46,7 +48,6 @@ def download_csv_from_drive(service, folder_id, folder_name, file_name):
     todays_folder_id = items[0]['id']
     print(f"Found folder: '{folder_name}' with ID: {todays_folder_id}")
 
-    # Search for the file in the folder
     query = f"name='{file_name}' and '{todays_folder_id}' in parents"
     results = service.files().list(q=query, spaces='drive', fields='nextPageToken, files(id, name)').execute()
     items = results.get('files', [])
@@ -71,16 +72,25 @@ def download_csv_from_drive(service, folder_id, folder_name, file_name):
 
 # --- Main Script ---
 try:
+    # --- THIS IS THE UPDATED AUTHENTICATION BLOCK ---
     print("Step 1: Authenticating and setting up services...")
-    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-    creds = Credentials.from_service_account_file(CREDS_PATH, scopes=scopes)
+    creds_json_str = os.getenv("GCP_SA_KEY")
+    if not creds_json_str:
+        raise ValueError("GCP_SA_KEY secret not found. Please check GitHub Actions secrets.")
+
+    creds_info = json.loads(creds_json_str)
+    creds = Credentials.from_service_account_info(creds_info, scopes=SCOPES)
+    
     gc = gspread.authorize(creds)
     drive_service = build('drive', 'v3', credentials=creds)
     spreadsheet = gc.open_by_url(G_SHEET_URL)
     print("Successfully authenticated and set up services.")
-
+    # --- END OF UPDATED BLOCK ---
+    
+    # The rest of the script remains exactly the same...
     print("Step 2: Loading data from Google Drive...")
     todays_folder = get_todays_folder_name()
+    # (The rest of your code...)
     df = download_csv_from_drive(drive_service, DRIVE_FOLDER_ID, todays_folder, "Merged_Breach_Report.csv")
 
     if df is None:
