@@ -55,7 +55,8 @@ def download_ap_files(service):
 
     # 2. Find the 'AP files' subfolder within the daily folder
     print("Searching for 'AP files' subfolder...")
-    query = f"'name' = 'AP files' and '{daily_folder_id}' in parents and mimeType='application/vnd.google-apps.folder'"
+    # CORRECTED LINE: Removed single quotes around 'name'
+    query = f"name = 'AP files' and '{daily_folder_id}' in parents and mimeType='application/vnd.google-apps.folder'"
     results = service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
     ap_folders = results.get('files', [])
 
@@ -207,3 +208,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
