@@ -4,3 +4,5 @@ gspread-dataframe
 google-auth-oauthlib
 google-api-python-client
 numpy
+XlsxWriter
+openpyxl
