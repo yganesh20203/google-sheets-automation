@@ -140,7 +140,6 @@ if not base_file_path or not os.path.exists(base_file_path):
 
 print("\nCleaning 'fareye_report.csv'...")
 try:
-    # --- FIX 2: Address DtypeWarning by specifying dtype for column 32 ---
     latest_df = pd.read_csv(latest_file_path, dtype={28: str, 32: str})
     
     if 'Store Code1' in latest_df.columns:
@@ -231,8 +230,6 @@ if 'Store Code1' in updated_df.columns:
 
 if 'POS Invoice Date' in updated_df.columns:
     updated_df['POS Invoice Date'] = pd.to_datetime(updated_df['POS Invoice Date'], errors='coerce')
-    
-    # --- FIX 1: Make the current timestamp timezone-naive to match the DataFrame column ---
     current_time_naive = pd.Timestamp.now().normalize()
     updated_df['age'] = (current_time_naive - updated_df['POS Invoice Date']).dt.days
     print("Added 'age'.")
@@ -259,7 +256,12 @@ final_column_order = [
     'Source Order', "Member's mobile number", 'POS Invoice Number', 'Gross Weight', 'ShipToPincode', 
     'store name', 'age', 'aging bucket', 'aging column detailed'
 ]
-updated_df = updated_df.reindex(columns=final_column_order, errors='ignore')
+
+# --- FIX: Filter the final_column_order list to only include columns that exist in the DataFrame ---
+existing_columns = [col for col in final_column_order if col in updated_df.columns]
+
+# --- Use the filtered list to reorder the DataFrame. This is safer. ---
+updated_df = updated_df[existing_columns]
 print("✅ Columns reordered successfully.")
 
 final_output_path = os.path.join(LOCAL_TEMP_DIR, updated_final_name)
