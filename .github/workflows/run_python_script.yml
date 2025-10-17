@@ -28,4 +28,4 @@ jobs:
       - name: Run Python script
         env:
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
-        run: python main.py
+        run: python report_automation.py # <-- This line is updated
