@@ -64,7 +64,6 @@ except Exception as e:
 
 # --- Function to download a file from Google Drive ---
 def download_file_from_drive(folder_id, filename):
-    """Finds a file by name in a specific folder and downloads it."""
     local_path = os.path.join(LOCAL_TEMP_DIR, filename)
     try:
         query = f"'{folder_id}' in parents and trashed=false and title='{filename}'"
@@ -74,8 +73,7 @@ def download_file_from_drive(folder_id, filename):
             return None
         
         print(f"Downloading '{filename}'...")
-        file_drive = file_list[0]
-        file_drive.GetContentFile(local_path)
+        file_list[0].GetContentFile(local_path)
         print(f"✅ Downloaded '{filename}' successfully.")
         return local_path
     except Exception as e:
@@ -84,21 +82,16 @@ def download_file_from_drive(folder_id, filename):
 
 # --- Function to upload a file to Google Drive ---
 def upload_file_to_drive(folder_id, local_path):
-    """Uploads a local file to a specific Google Drive folder."""
     filename = os.path.basename(local_path)
     try:
-        # Check if file already exists to overwrite it
         query = f"'{folder_id}' in parents and trashed=false and title='{filename}'"
         file_list = drive.ListFile({'q': query}).GetList()
         
-        if file_list:
-            drive_file = file_list[0]
-            drive_file.SetContentFile(local_path)
-            print(f"Overwriting '{filename}' in Google Drive...")
-        else:
-            drive_file = drive.CreateFile({'title': filename, 'parents': [{'id': folder_id}]})
-            drive_file.SetContentFile(local_path)
-            print(f"Uploading new file '{filename}' to Google Drive...")
+        drive_file = file_list[0] if file_list else drive.CreateFile({'title': filename, 'parents': [{'id': folder_id}]})
+        drive_file.SetContentFile(local_path)
+        
+        action = "Overwriting" if file_list else "Uploading new file"
+        print(f"{action} '{filename}' in Google Drive...")
         
         drive_file.Upload()
         print(f"✅ Uploaded '{filename}' successfully.")
@@ -156,15 +149,11 @@ try:
         print("Cleaned 'Store Code1' column.")
 
     if 'Invoice Value' in latest_df.columns and 'Invoice Value Without Tax' in latest_df.columns:
-        # Copy values to the target column
         latest_df['Invoice Value'] = latest_df['Invoice Value Without Tax']
         print("Updated 'Invoice Value' column.")
-        
-        # Delete the original column
         latest_df.drop(columns=['Invoice Value Without Tax'], inplace=True)
         print("Removed 'Invoice Value Without Tax' column.")
     
-    # --- NEW STEP: Save and upload the cleaned file ---
     print("Saving cleaned 'fareye_report.csv' back to Google Drive...")
     latest_df.to_csv(latest_file_path, index=False)
     upload_file_to_drive(GDRIVE_FOLDER_ID, latest_file_path)
@@ -184,7 +173,6 @@ try:
     else:
         base_df = pd.read_excel(base_file_path)
     store_master_df = pd.read_excel(store_master_path)
-    # latest_df is already loaded and cleaned in memory from the pre-processing step
     print("✅ All source files loaded successfully.")
 except Exception as e:
     print(f"❌ Error loading dataframes: {e}. Halting.")
@@ -204,6 +192,7 @@ if 'Current Flow' in base_df.columns:
     base_df = base_df[base_df['Current Flow'] != 'end'].copy()
 
 ## Step 3: Update & Identify Common/New Orders
+print("\n--- Step 3: Updating Common Orders ---")
 base_hybris_set = set(base_df['int_hybris'].dropna())
 latest_hybris_set = set(latest_df['int_hybris'].dropna())
 common_orders = base_hybris_set.intersection(latest_hybris_set)
@@ -214,9 +203,9 @@ latest_df.drop_duplicates(subset=['int_hybris'], keep='last', inplace=True)
 base_df.set_index('int_hybris', inplace=True)
 latest_df.set_index('int_hybris', inplace=True)
 
-column_p_name, column_b_name = base_df.columns[15], base_df.columns[1]
-latest_column_p_name, latest_column_b_name = latest_df.columns[15], latest_df.columns[1]
-base_df.loc[list(common_orders), [column_p_name, column_b_name]] = latest_df.loc[list(common_orders), [latest_column_p_name, latest_column_b_name]]
+# Use explicit column names for safety
+columns_to_update = ['Current Status', 'Reference Number'] # Example, change if needed
+base_df.loc[list(common_orders), columns_to_update] = latest_df.loc[list(common_orders), columns_to_update]
 base_df.reset_index(inplace=True)
 
 ## Step 4: Append New Orders
@@ -244,7 +233,7 @@ if 'Store Code1' in updated_df.columns:
 
 if 'POS Invoice Date' in updated_df.columns:
     updated_df['POS Invoice Date'] = pd.to_datetime(updated_df['POS Invoice Date'], errors='coerce')
-    updated_df['age'] = (pd.Timestamp.now().normalize() - updated_df['POS Invoice Date']).dt.days
+    updated_df['age'] = (pd.Timestamp.now(tz='Asia/Kolkata').normalize() - updated_df['POS Invoice Date']).dt.days
     print("Added 'age'.")
 
 if 'age' in updated_df.columns:
@@ -255,8 +244,26 @@ if 'age' in updated_df.columns:
     updated_df['aging column detailed'] = pd.cut(updated_df['age'], bins=bins, labels=detailed_labels)
     print("Added 'aging bucket' and 'aging column detailed'.")
 
-## Step 7: Save and Upload Final File
-print(f"\n--- Step 7: Saving and Uploading Final File ---")
+## Step 7: Reorder Columns and Save Final File
+print(f"\n--- Step 7: Reordering Columns and Uploading Final File ---")
+
+# --- FIX: Define the final, correct column order ---
+final_column_order = [
+    'int_hybris', 'Reference Number', 'Current Flow', 'Created At', 'Last Updated At', 
+    'Branch Code', 'Member Name', 'Membership number', 'Member Segment', 'Delivery Address', 
+    'Hybris Order Number', 'Order Type', 'Invoice Value', 'POS Invoice Date', 'Order Date', 
+    'Handover Date', 'Current Status', 'Payment Mode', 'Prev Status', 'OTP', 
+    'Ap Associate', 'OTP From field', 'LR Number', 'LR Date Time', 'Delivery Success Timestamp', 
+    'Maker Checker Success Timestamp', 'Delivery Success Date', 'Mode of Fullfillment', 'Branch', 
+    'Eway Bill Number', 'Handover to Member Flag', 'Trip Start Time', 'Trip End Time', 'Store Code1', 
+    'Source Order', "Member's mobile number", 'POS Invoice Number', 'Gross Weight', 'ShipToPincode', 
+    'store name', 'age', 'aging bucket', 'aging column detailed'
+]
+
+# Use reindex to enforce the order. 'errors="ignore"' prevents errors if a column is missing.
+updated_df = updated_df.reindex(columns=final_column_order, errors='ignore')
+print("✅ Columns reordered successfully.")
+
 final_output_path = os.path.join(LOCAL_TEMP_DIR, updated_final_name)
 updated_df.to_excel(final_output_path, index=False)
 upload_file_to_drive(GDRIVE_FOLDER_ID, final_output_path)
