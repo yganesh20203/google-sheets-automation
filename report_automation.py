@@ -208,13 +208,12 @@ columns_to_update = ['Current Status', 'Reference Number'] # Example, change if 
 base_df.loc[list(common_orders), columns_to_update] = latest_df.loc[list(common_orders), columns_to_update]
 base_df.reset_index(inplace=True)
 
-## Step 4: Append New Orders
+## Step 4: Append New Orders (REVISED AND FIXED)
 print("\n--- Step 4: Appending New Orders ---")
 new_orders_df = latest_df.loc[list(new_orders)].reset_index()
-all_columns = pd.Index(base_df.columns.union(new_orders_df.columns))
-base_df = base_df.reindex(columns=all_columns)
-new_orders_df = new_orders_df.reindex(columns=all_columns)
-updated_df = pd.concat([base_df, new_orders_df], ignore_index=True)
+# --- FIX: Remove the problematic reindex steps and concat directly ---
+# This single line replaces the previous block that was causing the error.
+updated_df = pd.concat([base_df, new_orders_df], ignore_index=True, sort=False)
 print(f"Total rows after append: {updated_df.shape[0]}")
 
 ## Step 5: Delete Ended Orders
@@ -247,7 +246,6 @@ if 'age' in updated_df.columns:
 ## Step 7: Reorder Columns and Save Final File
 print(f"\n--- Step 7: Reordering Columns and Uploading Final File ---")
 
-# --- FIX: Define the final, correct column order ---
 final_column_order = [
     'int_hybris', 'Reference Number', 'Current Flow', 'Created At', 'Last Updated At', 
     'Branch Code', 'Member Name', 'Membership number', 'Member Segment', 'Delivery Address', 
@@ -259,8 +257,6 @@ final_column_order = [
     'Source Order', "Member's mobile number", 'POS Invoice Number', 'Gross Weight', 'ShipToPincode', 
     'store name', 'age', 'aging bucket', 'aging column detailed'
 ]
-
-# Use reindex to enforce the order. 'errors="ignore"' prevents errors if a column is missing.
 updated_df = updated_df.reindex(columns=final_column_order, errors='ignore')
 print("✅ Columns reordered successfully.")
 
