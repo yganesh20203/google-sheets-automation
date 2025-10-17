@@ -160,9 +160,14 @@ try:
         latest_df['Invoice Value'] = latest_df['Invoice Value Without Tax']
         print("Updated 'Invoice Value' column.")
         
-        # --- NEW STEP: Delete the original column ---
+        # Delete the original column
         latest_df.drop(columns=['Invoice Value Without Tax'], inplace=True)
         print("Removed 'Invoice Value Without Tax' column.")
+    
+    # --- NEW STEP: Save and upload the cleaned file ---
+    print("Saving cleaned 'fareye_report.csv' back to Google Drive...")
+    latest_df.to_csv(latest_file_path, index=False)
+    upload_file_to_drive(GDRIVE_FOLDER_ID, latest_file_path)
 
 except Exception as e:
     print(f"❌ An error occurred while cleaning the fareye report: {e}. Halting.")
@@ -179,6 +184,7 @@ try:
     else:
         base_df = pd.read_excel(base_file_path)
     store_master_df = pd.read_excel(store_master_path)
+    # latest_df is already loaded and cleaned in memory from the pre-processing step
     print("✅ All source files loaded successfully.")
 except Exception as e:
     print(f"❌ Error loading dataframes: {e}. Halting.")
