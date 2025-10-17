@@ -140,7 +140,8 @@ if not base_file_path or not os.path.exists(base_file_path):
 
 print("\nCleaning 'fareye_report.csv'...")
 try:
-    latest_df = pd.read_csv(latest_file_path, dtype={28: str})
+    # --- FIX 2: Address DtypeWarning by specifying dtype for column 32 ---
+    latest_df = pd.read_csv(latest_file_path, dtype={28: str, 32: str})
     
     if 'Store Code1' in latest_df.columns:
         latest_df['Store Code1'] = pd.to_numeric(
@@ -208,11 +209,9 @@ columns_to_update = ['Current Status', 'Reference Number'] # Example, change if 
 base_df.loc[list(common_orders), columns_to_update] = latest_df.loc[list(common_orders), columns_to_update]
 base_df.reset_index(inplace=True)
 
-## Step 4: Append New Orders (REVISED AND FIXED)
+## Step 4: Append New Orders
 print("\n--- Step 4: Appending New Orders ---")
 new_orders_df = latest_df.loc[list(new_orders)].reset_index()
-# --- FIX: Remove the problematic reindex steps and concat directly ---
-# This single line replaces the previous block that was causing the error.
 updated_df = pd.concat([base_df, new_orders_df], ignore_index=True, sort=False)
 print(f"Total rows after append: {updated_df.shape[0]}")
 
@@ -232,7 +231,10 @@ if 'Store Code1' in updated_df.columns:
 
 if 'POS Invoice Date' in updated_df.columns:
     updated_df['POS Invoice Date'] = pd.to_datetime(updated_df['POS Invoice Date'], errors='coerce')
-    updated_df['age'] = (pd.Timestamp.now(tz='Asia/Kolkata').normalize() - updated_df['POS Invoice Date']).dt.days
+    
+    # --- FIX 1: Make the current timestamp timezone-naive to match the DataFrame column ---
+    current_time_naive = pd.Timestamp.now().normalize()
+    updated_df['age'] = (current_time_naive - updated_df['POS Invoice Date']).dt.days
     print("Added 'age'.")
 
 if 'age' in updated_df.columns:
