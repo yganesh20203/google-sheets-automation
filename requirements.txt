@@ -6,3 +6,5 @@ google-api-python-client
 numpy
 XlsxWriter
 openpyxl
+google-auth-oauthlib
+PyDrive2
