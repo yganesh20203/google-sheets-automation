@@ -26,7 +26,7 @@ if not os.path.exists(LOCAL_TEMP_DIR):
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # ==============================================================================
-# SECTION 2: AUTHENTICATION & GOOGLE DRIVE SETUP (WITH FIX)
+# SECTION 2: AUTHENTICATION & GOOGLE DRIVE SETUP
 # ==============================================================================
 print("--- Authenticating with Google Services ---")
 
@@ -40,11 +40,11 @@ try:
     creds_dict = json.loads(gcp_sa_key_str)
     scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     
-    # --- Authorize gspread (This method works well for it) ---
+    # --- Authorize gspread ---
     creds_gspread = Credentials.from_service_account_info(creds_dict, scopes=scopes)
     gs_client = gspread.authorize(creds_gspread)
 
-    # --- Authorize pydrive2 (THE FIX: Use its dedicated service auth method) ---
+    # --- Authorize pydrive2 ---
     settings = {
         "client_config_backend": "service",
         "service_config": {
@@ -52,7 +52,7 @@ try:
         }
     }
     gauth = GoogleAuth(settings=settings)
-    gauth.ServiceAuth() # Authenticate using the service account dictionary
+    gauth.ServiceAuth()
     drive = GoogleDrive(gauth)
 
     print("✅ Authentication successful for both services.")
@@ -156,8 +156,14 @@ try:
         print("Cleaned 'Store Code1' column.")
 
     if 'Invoice Value' in latest_df.columns and 'Invoice Value Without Tax' in latest_df.columns:
+        # Copy values to the target column
         latest_df['Invoice Value'] = latest_df['Invoice Value Without Tax']
         print("Updated 'Invoice Value' column.")
+        
+        # --- NEW STEP: Delete the original column ---
+        latest_df.drop(columns=['Invoice Value Without Tax'], inplace=True)
+        print("Removed 'Invoice Value Without Tax' column.")
+
 except Exception as e:
     print(f"❌ An error occurred while cleaning the fareye report: {e}. Halting.")
     exit()
