@@ -15,7 +15,6 @@ import json
 GDRIVE_FOLDER_ID = '1a7BSDVcQOXon5jP2CoGSpodnv7Ggj9Da'
 
 # --- Google Sheet URL ---
-# !!! IMPORTANT: UPDATE THIS URL TO YOUR GOOGLE SHEET !!!
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1WvupGx_L3qpQf4JpDVmVKWwEPmXsT-9a_8kJQOYOpEk"
 
 # --- Define local temporary file paths for processing ---
@@ -27,28 +26,36 @@ if not os.path.exists(LOCAL_TEMP_DIR):
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # ==============================================================================
-# SECTION 2: AUTHENTICATION & GOOGLE DRIVE SETUP
+# SECTION 2: AUTHENTICATION & GOOGLE DRIVE SETUP (WITH FIX)
 # ==============================================================================
 print("--- Authenticating with Google Services ---")
 
-# --- Authenticate using the GCP_SA_KEY environment variable ---
 try:
-    gcp_sa_key = os.environ.get('GCP_SA_KEY')
-    if not gcp_sa_key:
+    # Get the credentials from the environment variable
+    gcp_sa_key_str = os.environ.get('GCP_SA_KEY')
+    if not gcp_sa_key_str:
         raise ValueError("GCP_SA_KEY environment variable not found.")
-
-    creds_dict = json.loads(gcp_sa_key)
+    
+    # Load the credentials from the JSON string
+    creds_dict = json.loads(gcp_sa_key_str)
     scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    
+    # --- Authorize gspread (This method works well for it) ---
+    creds_gspread = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    gs_client = gspread.authorize(creds_gspread)
 
-    # Authorize gspread
-    gs_client = gspread.authorize(creds)
-
-    # Authorize pydrive
-    gauth = GoogleAuth()
-    gauth.credentials = creds
+    # --- Authorize pydrive2 (THE FIX: Use its dedicated service auth method) ---
+    settings = {
+        "client_config_backend": "service",
+        "service_config": {
+            "client_json_dict": creds_dict
+        }
+    }
+    gauth = GoogleAuth(settings=settings)
+    gauth.ServiceAuth() # Authenticate using the service account dictionary
     drive = GoogleDrive(gauth)
-    print("✅ Authentication successful.")
+
+    print("✅ Authentication successful for both services.")
 
 except Exception as e:
     print(f"❌ Authentication failed: {e}")
@@ -60,7 +67,8 @@ def download_file_from_drive(folder_id, filename):
     """Finds a file by name in a specific folder and downloads it."""
     local_path = os.path.join(LOCAL_TEMP_DIR, filename)
     try:
-        file_list = drive.ListFile({'q': f"'{folder_id}' in parents and trashed=false and title='{filename}'"}).GetList()
+        query = f"'{folder_id}' in parents and trashed=false and title='{filename}'"
+        file_list = drive.ListFile({'q': query}).GetList()
         if not file_list:
             print(f"⚠️  File not found in Google Drive: {filename}")
             return None
@@ -74,19 +82,41 @@ def download_file_from_drive(folder_id, filename):
         print(f"❌ Error downloading '{filename}': {e}")
         return None
 
+# --- Function to upload a file to Google Drive ---
+def upload_file_to_drive(folder_id, local_path):
+    """Uploads a local file to a specific Google Drive folder."""
+    filename = os.path.basename(local_path)
+    try:
+        # Check if file already exists to overwrite it
+        query = f"'{folder_id}' in parents and trashed=false and title='{filename}'"
+        file_list = drive.ListFile({'q': query}).GetList()
+        
+        if file_list:
+            drive_file = file_list[0]
+            drive_file.SetContentFile(local_path)
+            print(f"Overwriting '{filename}' in Google Drive...")
+        else:
+            drive_file = drive.CreateFile({'title': filename, 'parents': [{'id': folder_id}]})
+            drive_file.SetContentFile(local_path)
+            print(f"Uploading new file '{filename}' to Google Drive...")
+        
+        drive_file.Upload()
+        print(f"✅ Uploaded '{filename}' successfully.")
+    except Exception as e:
+        print(f"❌ Error uploading '{filename}': {e}")
+
+
 # --- Download all required files ---
 print("\n--- Downloading files from Google Drive ---")
 base_file_name = 'base_data_open_orders.xlsx'
 latest_file_name = 'fareye_report.csv'
 store_master_name = 'CT_Master_Store_Code.xlsx'
-updated_final_name = 'updated_base_data_final.xlsx' # Previous run's output
-new_base_name_csv = 'base_data_open_orders.csv' # New base file to be created
+updated_final_name = 'updated_base_data_final.xlsx'
+new_base_name_csv = 'base_data_open_orders.csv'
 
 latest_file_path = download_file_from_drive(GDRIVE_FOLDER_ID, latest_file_name)
 store_master_path = download_file_from_drive(GDRIVE_FOLDER_ID, store_master_name)
-updated_final_path = download_file_from_drive(GDRIVE_FOLDER_ID, updated_final_name) # This might not exist on the first run
-
-# The new base file will be created locally, not downloaded
+updated_final_path = download_file_from_drive(GDRIVE_FOLDER_ID, updated_final_name)
 new_base_path_csv = os.path.join(LOCAL_TEMP_DIR, new_base_name_csv)
 
 # ==============================================================================
@@ -94,7 +124,6 @@ new_base_path_csv = os.path.join(LOCAL_TEMP_DIR, new_base_name_csv)
 # ==============================================================================
 print("\n--- Starting Pre-processing & File Rotation ---")
 
-# --- Step A: Rotate base file if 'updated_base_data_final.xlsx' was downloaded ---
 if updated_final_path and os.path.exists(updated_final_path):
     print(f"Found '{updated_final_name}'. Processing it to create the new base file.")
     try:
@@ -102,8 +131,9 @@ if updated_final_path and os.path.exists(updated_final_path):
         cols_to_delete = ['int_hybris', 'Reference Number', 'store name', 'age', 'aging bucket', 'aging column detailed']
         prev_run_df.drop(columns=cols_to_delete, inplace=True, errors='ignore')
         prev_run_df.to_csv(new_base_path_csv, index=False)
-        print(f"Successfully created new base file: '{new_base_name_csv}'")
-        base_file_path = new_base_path_csv # Use this new CSV as the base
+        print(f"Successfully created new local base file: '{new_base_name_csv}'")
+        upload_file_to_drive(GDRIVE_FOLDER_ID, new_base_path_csv)
+        base_file_path = new_base_path_csv
     except Exception as e:
         print(f"Error processing '{updated_final_name}': {e}. Halting script.")
         exit()
@@ -115,7 +145,6 @@ if not base_file_path or not os.path.exists(base_file_path):
      print("❌ Critical error: No base file available to process. Halting.")
      exit()
 
-# --- Step B: Clean the 'fareye_report.csv' in memory ---
 print("\nCleaning 'fareye_report.csv'...")
 try:
     latest_df = pd.read_csv(latest_file_path, dtype={28: str})
@@ -138,7 +167,6 @@ except Exception as e:
 # ==============================================================================
 print("\n--- Starting Main Data Processing ---")
 
-# --- LOAD FILES ---
 try:
     if base_file_path.endswith('.csv'):
         base_df = pd.read_csv(base_file_path)
@@ -150,8 +178,6 @@ except Exception as e:
     print(f"❌ Error loading dataframes: {e}. Halting.")
     exit()
 
-# [The rest of your processing logic remains identical to your original script]
-# ... (Steps 1 through 6 are exactly the same)
 ## Step 1: Clean and Convert Key Columns
 print("\n--- Step 1: Cleaning and Converting Key Columns ---")
 base_df['int_hybris'] = base_df.iloc[:, 9].astype(str).str.extract(r'(\d+)').iloc[:, 0]
@@ -184,7 +210,7 @@ base_df.reset_index(inplace=True)
 ## Step 4: Append New Orders
 print("\n--- Step 4: Appending New Orders ---")
 new_orders_df = latest_df.loc[list(new_orders)].reset_index()
-all_columns = base_df.columns.union(new_orders_df.columns)
+all_columns = pd.Index(base_df.columns.union(new_orders_df.columns))
 base_df = base_df.reindex(columns=all_columns)
 new_orders_df = new_orders_df.reindex(columns=all_columns)
 updated_df = pd.concat([base_df, new_orders_df], ignore_index=True)
@@ -217,12 +243,11 @@ if 'age' in updated_df.columns:
     updated_df['aging column detailed'] = pd.cut(updated_df['age'], bins=bins, labels=detailed_labels)
     print("Added 'aging bucket' and 'aging column detailed'.")
 
-## Step 7: Save Local File before Uploading
-# NOTE: This step is now implicit. The dataframe is ready for upload.
-# You could optionally save the final file locally if needed for debugging.
+## Step 7: Save and Upload Final File
+print(f"\n--- Step 7: Saving and Uploading Final File ---")
 final_output_path = os.path.join(LOCAL_TEMP_DIR, updated_final_name)
 updated_df.to_excel(final_output_path, index=False)
-print(f"\n--- Final processed file saved locally to '{final_output_path}' ---")
+upload_file_to_drive(GDRIVE_FOLDER_ID, final_output_path)
 
 
 ## Step 8: Send Data to Google Sheets
