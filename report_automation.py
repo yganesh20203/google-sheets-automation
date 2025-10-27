@@ -270,23 +270,33 @@ upload_file_to_drive(GDRIVE_FOLDER_ID, final_output_path)
 
 
 ## Step 8: Send Data to Google Sheets
+# --- REPLACEMENT FOR STEP 8 LOOP ---
 print("\n--- Step 8: Sending Data to Google Sheets ---")
 try:
     spreadsheet = gs_client.open_by_url(SHEET_URL)
     worksheet = spreadsheet.get_worksheet(0)
     
     df_for_gsheet = updated_df.copy()
-    for col in df_for_gsheet.columns:
-        if pd.api.types.is_datetime64_any_dtype(df_for_gsheet[col]):
-            df_for_gsheet[col] = df_for_gsheet[col].dt.strftime('%Y-%m-%d %H:%M:%S').replace('NaT', '')
-        else:
-            df_for_gsheet[col] = df_for_gsheet[col].astype(str).replace('<NA>', '').replace('nan', '')
+    
+    # 1. Handle datetimes and NaT (as you did)
+    for col in df_for_gsheet.select_dtypes(include=['datetime64[ns]']).columns:
+        df_for_gsheet[col] = df_for_gsheet[col].dt.strftime('%Y-%m-%d %H:%M:%S').replace('NaT', '')
+        
+    # 2. Convert all other NA/NaN/None values to empty strings.
+    #    This is safer than astype(str) as it lets gspread_dataframe
+    #    handle the string conversion and escaping.
     df_for_gsheet.fillna('', inplace=True)
     
+    # 3. Explicitly convert <NA> from Int64 cols (which fillna might miss)
+    df_for_gsheet = df_for_gsheet.replace('<NA>', '')
+
     print("Clearing existing data from the sheet...")
     worksheet.clear()
     print("Writing new data to the sheet...")
+    
+    # 4. Let set_with_dataframe handle the final conversion
     set_with_dataframe(worksheet, df_for_gsheet, resize=True)
+    
     print("✅✅ Successfully updated the Google Sheet! ✅✅")
 
 except Exception as e:
