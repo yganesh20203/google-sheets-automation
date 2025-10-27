@@ -120,14 +120,15 @@ new_base_path_csv = os.path.join(LOCAL_TEMP_DIR, new_base_name_csv)
 
 print("\nCleaning 'fareye_report.csv'...")
 try:
-    # --- FIX 1: Read the file using a TAB separator ---
-    print(f"Reading '{latest_file_name}' with TAB delimiter...")
+    # --- FIX 3: Read the file using TAB separator but IGNORE all quotes ---
+    print(f"Reading '{latest_file_name}' with TAB delimiter, ignoring quotes...")
     latest_df = pd.read_csv(
         latest_file_path, 
         dtype={28: str, 32: str},
-        sep='\t',              # <--- THIS IS THE CRITICAL FIX
-        engine='python',       # Use the more flexible python engine
-        on_bad_lines='warn'    # Print a warning if a row has an issue
+        sep='\t',                  # Correct: Use TAB separator
+        quoting=csv.QUOTE_NONE,    # <--- NEW FIX: Ignore all quotes
+        on_bad_lines='warn'        # Keep this to see if any lines are still skipped
+        # We have REMOVED engine='python' to support QUOTE_NONE
     )
     print("File read successfully.")
 
@@ -145,21 +146,21 @@ try:
     
     print("Saving cleaned 'fareye_report.csv' back to Google Drive...")
     
-    # --- FIX 2: Write the file back using a TAB separator ---
-    # We must wrap all fields in quotes to safely handle newlines next time.
+    # --- Keep this write logic ---
+    # This will write a *clean* file back to Drive, fixing the quote issue
+    # for all future runs.
     latest_df.to_csv(
         latest_file_path, 
         index=False, 
-        sep='\t',               # <--- MUST MATCH THE READ
-        quoting=csv.QUOTE_ALL,  # Force quotes on all fields
+        sep='\t',               # Write as a TAB file
+        quoting=csv.QUOTE_ALL,  # Wrap ALL fields in quotes correctly
         quotechar='"'
     )
     upload_file_to_drive(GDRIVE_FOLDER_ID, latest_file_path)
 
 except Exception as e:
     print(f"❌ An error occurred while cleaning the fareye report: {e}. Halting.")
-    exit()
-# ==============================================================================
+    exit()# ==============================================================================
 # SECTION 4: MAIN SCRIPT LOGIC
 # ==============================================================================
 print("\n--- Starting Main Data Processing ---")
