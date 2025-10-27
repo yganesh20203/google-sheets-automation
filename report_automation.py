@@ -7,6 +7,7 @@ from pydrive2.drive import GoogleDrive
 import warnings
 import os
 import json
+import csv
 
 # ==============================================================================
 # SECTION 1: CONFIGURATION
@@ -115,33 +116,20 @@ new_base_path_csv = os.path.join(LOCAL_TEMP_DIR, new_base_name_csv)
 # ==============================================================================
 # SECTION 3: PRE-PROCESSING & FILE ROTATION
 # ==============================================================================
-print("\n--- Starting Pre-processing & File Rotation ---")
-
-if updated_final_path and os.path.exists(updated_final_path):
-    print(f"Found '{updated_final_name}'. Processing it to create the new base file.")
-    try:
-        prev_run_df = pd.read_excel(updated_final_path)
-        cols_to_delete = ['int_hybris', 'Reference Number', 'store name', 'age', 'aging bucket', 'aging column detailed']
-        prev_run_df.drop(columns=cols_to_delete, inplace=True, errors='ignore')
-        prev_run_df.to_csv(new_base_path_csv, index=False)
-        print(f"Successfully created new local base file: '{new_base_name_csv}'")
-        upload_file_to_drive(GDRIVE_FOLDER_ID, new_base_path_csv)
-        base_file_path = new_base_path_csv
-    except Exception as e:
-        print(f"Error processing '{updated_final_name}': {e}. Halting script.")
-        exit()
-else:
-    print(f"'{updated_final_name}' not found. Using original '{base_file_name}' as base.")
-    base_file_path = download_file_from_drive(GDRIVE_FOLDER_ID, base_file_name)
-
-if not base_file_path or not os.path.exists(base_file_path):
-     print("❌ Critical error: No base file available to process. Halting.")
-     exit()
+# --- This REPLACES the "Cleaning 'fareye_report.csv'..." block in SECTION 3 ---
 
 print("\nCleaning 'fareye_report.csv'...")
 try:
-    latest_df = pd.read_csv(latest_file_path, dtype={28: str, 32: str})
-    
+    # --- FIX 1: Make the CSV reading more robust ---
+    print(f"Reading '{latest_file_name}' with python engine...")
+    latest_df = pd.read_csv(
+        latest_file_path, 
+        dtype={28: str, 32: str},
+        engine='python',        # Use the more flexible python engine
+        on_bad_lines='warn'     # Print a warning if a row has an issue
+    )
+    print("File read successfully.")
+
     if 'Store Code1' in latest_df.columns:
         latest_df['Store Code1'] = pd.to_numeric(
             latest_df['Store Code1'].astype(str).str.extract(r'(\d+)').iloc[:, 0], errors='coerce'
@@ -155,13 +143,20 @@ try:
         print("Removed 'Invoice Value Without Tax' column.")
     
     print("Saving cleaned 'fareye_report.csv' back to Google Drive...")
-    latest_df.to_csv(latest_file_path, index=False)
+    
+    # --- FIX 2: Make the CSV writing more robust ---
+    # This wraps ALL fields in quotes to prevent this problem on the next run
+    latest_df.to_csv(
+        latest_file_path, 
+        index=False, 
+        quoting=csv.QUOTE_ALL,  # Wrap all fields in quotes
+        quotechar='"'
+    )
     upload_file_to_drive(GDRIVE_FOLDER_ID, latest_file_path)
 
 except Exception as e:
     print(f"❌ An error occurred while cleaning the fareye report: {e}. Halting.")
     exit()
-
 # ==============================================================================
 # SECTION 4: MAIN SCRIPT LOGIC
 # ==============================================================================
