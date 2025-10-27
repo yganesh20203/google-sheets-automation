@@ -120,13 +120,14 @@ new_base_path_csv = os.path.join(LOCAL_TEMP_DIR, new_base_name_csv)
 
 print("\nCleaning 'fareye_report.csv'...")
 try:
-    # --- FIX 1: Make the CSV reading more robust ---
-    print(f"Reading '{latest_file_name}' with python engine...")
+    # --- FIX 1: Read the file using a TAB separator ---
+    print(f"Reading '{latest_file_name}' with TAB delimiter...")
     latest_df = pd.read_csv(
         latest_file_path, 
         dtype={28: str, 32: str},
-        engine='python',        # Use the more flexible python engine
-        on_bad_lines='warn'     # Print a warning if a row has an issue
+        sep='\t',              # <--- THIS IS THE CRITICAL FIX
+        engine='python',       # Use the more flexible python engine
+        on_bad_lines='warn'    # Print a warning if a row has an issue
     )
     print("File read successfully.")
 
@@ -144,12 +145,13 @@ try:
     
     print("Saving cleaned 'fareye_report.csv' back to Google Drive...")
     
-    # --- FIX 2: Make the CSV writing more robust ---
-    # This wraps ALL fields in quotes to prevent this problem on the next run
+    # --- FIX 2: Write the file back using a TAB separator ---
+    # We must wrap all fields in quotes to safely handle newlines next time.
     latest_df.to_csv(
         latest_file_path, 
         index=False, 
-        quoting=csv.QUOTE_ALL,  # Wrap all fields in quotes
+        sep='\t',               # <--- MUST MATCH THE READ
+        quoting=csv.QUOTE_ALL,  # Force quotes on all fields
         quotechar='"'
     )
     upload_file_to_drive(GDRIVE_FOLDER_ID, latest_file_path)
