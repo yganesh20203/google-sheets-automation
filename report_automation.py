@@ -120,25 +120,42 @@ new_base_path_csv = os.path.join(LOCAL_TEMP_DIR, new_base_name_csv)
 
 print("\nCleaning 'fareye_report.csv'...")
 try:
-    # --- FIX 3: Read the file using TAB separator but IGNORE all quotes ---
-    print(f"Reading '{latest_file_name}' with TAB delimiter, ignoring quotes...")
+    # --- FIX 4: Read as a standard COMMA-separated file ---
+    # We will stick with comma as the separator, based on your new output.
+    print(f"Reading '{latest_file_name}' as a comma-separated file...")
     latest_df = pd.read_csv(
         latest_file_path, 
         dtype={28: str, 32: str},
-        sep='\t',                  # Correct: Use TAB separator
-        quoting=csv.QUOTE_NONE,    # <--- NEW FIX: Ignore all quotes
-        on_bad_lines='warn'        # Keep this to see if any lines are still skipped
-        # We have REMOVED engine='python' to support QUOTE_NONE
+        sep=',',                  # Use comma separator
+        engine='python',          # Python engine is best for complex quote issues
+        on_bad_lines='warn'       
     )
     print("File read successfully.")
 
+    # --- NEW CLEANUP STEP ---
+    # Loop through all columns and clean the '="...data..."' format
+    print("Cleaning Excel text-formatting (='...') from all columns...")
+    for col in latest_df.columns:
+        if latest_df[col].dtype == 'object':
+            # 1. Convert to string (just in case)
+            latest_df[col] = latest_df[col].astype(str)
+            # 2. Strip leading =' and leading/trailing quotes
+            # This handles both ="..." and ='...' and "..."
+            latest_df[col] = latest_df[col].str.strip('="\'')
+
+    print("Excel formatting cleaned.")
+
     if 'Store Code1' in latest_df.columns:
+        # The cleanup above might have left 'nan' strings, handle them
+        latest_df['Store Code1'] = latest_df['Store Code1'].replace('nan', pd.NA)
         latest_df['Store Code1'] = pd.to_numeric(
             latest_df['Store Code1'].astype(str).str.extract(r'(\d+)').iloc[:, 0], errors='coerce'
         ).astype('Int64')
         print("Cleaned 'Store Code1' column.")
 
     if 'Invoice Value' in latest_df.columns and 'Invoice Value Without Tax' in latest_df.columns:
+        # Handle 'nan' strings here too
+        latest_df['Invoice Value Without Tax'] = latest_df['Invoice Value Without Tax'].replace('nan', pd.NA)
         latest_df['Invoice Value'] = latest_df['Invoice Value Without Tax']
         print("Updated 'Invoice Value' column.")
         latest_df.drop(columns=['Invoice Value Without Tax'], inplace=True)
@@ -146,21 +163,21 @@ try:
     
     print("Saving cleaned 'fareye_report.csv' back to Google Drive...")
     
-    # --- Keep this write logic ---
-    # This will write a *clean* file back to Drive, fixing the quote issue
-    # for all future runs.
+    # --- Write back as a clean, standard CSV ---
+    # We will use QUOTE_ALL to prevent misaligned rows in the future.
     latest_df.to_csv(
         latest_file_path, 
         index=False, 
-        sep='\t',               # Write as a TAB file
-        quoting=csv.QUOTE_ALL,  # Wrap ALL fields in quotes correctly
+        sep=',',               # Write as a COMMA file
+        quoting=csv.QUOTE_ALL, # Wrap ALL fields in quotes correctly
         quotechar='"'
     )
     upload_file_to_drive(GDRIVE_FOLDER_ID, latest_file_path)
 
 except Exception as e:
     print(f"❌ An error occurred while cleaning the fareye report: {e}. Halting.")
-    exit()# ==============================================================================
+    exit()
+    
 # SECTION 4: MAIN SCRIPT LOGIC
 # ==============================================================================
 print("\n--- Starting Main Data Processing ---")
