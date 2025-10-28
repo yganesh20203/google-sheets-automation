@@ -20,10 +20,29 @@ jobs:
         with:
           python-version: '3.10'
 
+      # -----------------------------------------------------------------
+      # --- IMPROVED DEPENDENCY INSTALLATION ---
+      # -----------------------------------------------------------------
+
+      - name: Cache pip dependencies
+        # This step speeds up builds by caching packages between runs
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          # Create a new cache if requirements.txt changes
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
       - name: Install Python dependencies
         run: |
-          # Added new libraries for Google API access
-          pip install pandas numpy google-auth-oauthlib google-api-python-client
+          # Upgrade pip to ensure you have the latest installer
+          python -m pip install --upgrade pip
+          # Install dependencies from a requirements file
+          # This is more reliable and manageable
+          pip install -r requirements.txt
+      
+      # -----------------------------------------------------------------
 
       - name: Run the GDrive processing script
         env:
