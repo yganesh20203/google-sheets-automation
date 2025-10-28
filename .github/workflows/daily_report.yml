@@ -20,7 +20,7 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          pip install pandas numpy openpyxl gspread google-auth-oauthlib google-api-python-client
+          pip install pandas numpy openpyxl gspread google-auth google-api-python-client packaging
 
       - name: Run the Python script
         env:
