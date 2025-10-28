@@ -8,7 +8,6 @@ on:
   schedule:
     # This is a cron schedule that runs the workflow every day.
     # The time is in UTC. '15 5 * * *' corresponds to 10:45 AM IST.
-    # You can adjust this time as needed.
     - cron: '15 5 * * *'
   
   workflow_dispatch:
@@ -38,22 +37,29 @@ jobs:
         with:
           python-version: '3.10' # Specifies Python version 3.10
 
-      # Step 3: Install the required Python libraries
-      # This step uses pip to install all the dependencies your script needs.
-      # The problematic 'google-colab' library and its dependencies have been removed.
+      # Step 3: Cache pip dependencies
+      # This step speeds up builds by caching packages between runs
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          # Create a new cache key whenever requirements.txt changes
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      # Step 4: Install the required Python libraries
+      # This step now uses your requirements.txt file, which is more reliable.
       - name: Install Python dependencies
         run: |
-          pip install --upgrade pip
-          pip install pandas openpyxl google-api-python-client google-auth-httplib2 google-auth-oauthlib
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-      # Step 4: Run the Python script for data processing
+      # Step 5: Run the Python script for data processing
       # This is the final step where your actual script is executed.
       - name: Run the GDrive processing script
         env:
-          # IMPORTANT: You must create a secret in your GitHub repository named 'GCP_SA_KEY'.
-          # This secret should contain the JSON key for your Google Cloud Service Account.
-          # This is a secure way to provide credentials to your script.
+          # This securely passes your 'GCP_SA_KEY' secret to the script.
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
-        # The command to run your script. Make sure the filename matches.
-        # The file name in the canvas is 'gdrive_data_processing.py', so we use that here.
+        # Runs the python script you specified
         run: python free_delivery.py
