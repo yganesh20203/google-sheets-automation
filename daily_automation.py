@@ -832,28 +832,9 @@ def check_and_copy_files(drive_service):
         print("Please ensure the service account has 'Editor' access to both Drive folders.")
 
 # --- Run the main function ---
-if __name__ == \"__main__\":
+if __name__ == "__main__":
     # Don't forget to install pandas: pip install pandas
     drive_service_instance = authenticate()
     if drive_service_instance:
         check_and_copy_files(drive_service_instance)
-"
-   ]
-  }
- ],
- "metadata": {
-  "colab": {
-   "collapsed_sections": [],
-   "provenance": []
-  },
-  "kernelspec": {
-   "display_name": "Python 3",
-   "name": "python3"
-  },
-  "language_info": {
-   "name": "python"
-  }
- },
- "nbformat": 4,
- "nbformat_minor": 0
-}
+
