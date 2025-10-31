@@ -258,14 +258,18 @@ def update_excel_file(drive_service, df_to_paste, file_name_to_find, sheet_name_
         
         if sheet_name_to_update not in wb.sheetnames:
             log(f"  [ERROR] Sheet '{sheet_name_to_update}' not found in workbook. Available sheets: {wb.sheetnames}")
+            wb.close() # Close workbook on error
             return
 
+        # --- FASTER METHOD: Delete and recreate sheet ---
+        log(f"  Removing old sheet: '{sheet_name_to_update}'...")
+        sheet_index = wb.sheetnames.index(sheet_name_to_update) # Get index
         ws = wb[sheet_name_to_update]
+        wb.remove(ws)
         
-        # Clear all existing data from the sheet
-        log(f"  Clearing all data from sheet: '{sheet_name_to_update}'...")
-        if ws.max_row > 0:
-            ws.delete_rows(1, ws.max_row) 
+        log(f"  Creating new blank sheet: '{sheet_name_to_update}' at index {sheet_index}...")
+        ws = wb.create_sheet(title=sheet_name_to_update, index=sheet_index)
+        # --- END FASTER METHOD ---
 
         # Paste the DataFrame (header + data)
         log(f"  Pasting {len(df_to_paste)} rows into sheet...")
@@ -918,5 +922,6 @@ if __name__ == "__main__":
     else:
         log("❌ Halting script: Authentication failed.")
     log("--- Script execution finished ---")
-
+" in the document and am asking a query about/based on this code below.
+is it possible to download the file directly in a folder which i have given trusted access instead of google drive
 
