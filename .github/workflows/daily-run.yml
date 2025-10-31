@@ -31,14 +31,15 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # --- NEW STEP ---
-          # Explicitly uninstall any pre-existing versions to avoid conflicts
+          # --- NEW APPROACH ---
+          # Uninstall all versions
           pip uninstall -y openpyxl et-xmlfile
-          # --- END NEW STEP ---
           
-          # Force-reinstall openpyxl and its specific dependencies to ensure a clean install
-          # This avoids potential conflicts in the runner environment
-          pip install --upgrade --force-reinstall openpyxl==3.1.5 et-xmlfile==2.0.0
+          # Install a specific, stable version (3.0.10)
+          # This version uses the older, more stable pivot table import paths
+          pip install openpyxl==3.0.10
+          # --- END NEW APPROACH ---
+          
           pip install pandas google-api-python-client google-auth-httplib2 google-auth-oauthlib
 
       # Step 4: Authenticate with Google Cloud
