@@ -1,5 +1,5 @@
 # Make sure to install the required libraries:
-# pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib pandas openpyxl
+# pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib pandas openpyxl==3.0.10
 
 import datetime
 import zipfile
@@ -10,22 +10,25 @@ import pandas as pd  # Added pandas
 import numpy as np # Import numpy for nan
 import openpyxl
 from openpyxl.utils import get_column_letter
-# --- MODIFIED IMPORTS (Using modern openpyxl 3.x style) ---
-from openpyxl.worksheet.pivot_table import PivotTable, DataField
+
+# --- MODIFIED IMPORTS (Using openpyxl 3.0.10 style) ---
+from openpyxl.pivot.table import PivotTable
+from openpyxl.pivot.fields import PivotField
 # --- END MODIFIED IMPORTS ---
 
 # Google API Libraries for Service Account
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
+import google.auth # Import the google.auth library
 
 # --- Authentication ---
 
 # --- MODIFICATION FOR GITHUB ACTIONS ---
-# The script will look for the credentials file path in an environment variable.
-# If not found, it defaults to 'credentials.json' in the same folder.
-SERVICE_ACCOUNT_FILE = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS', 'credentials.json')
-# --- END MODIFICATION ---
+# Look for credentials in the current directory.
+# The GITHUB_APPLICATION_CREDENTIALS env var will point to this.
+SERVICE_ACCOUNT_FILE = 'credentials.json'
+# --- END MODIFICATION FOR GITHUB ACTIONS ---
 
 # Define the necessary scopes. We need full drive access to read and write.
 SCOPES = ['https://www.googleapis.com/auth/drive']
@@ -33,14 +36,12 @@ SCOPES = ['https://www.googleapis.com/auth/drive']
 def authenticate():
     """Authenticates using the service account file."""
     try:
-        creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+        # The script will automatically find the credentials file
+        # using the GOOGLE_APPLICATION_CREDENTIALS environment variable
+        creds, _ = google.auth.default(scopes=SCOPES)
         drive_service = build('drive', 'v3', credentials=creds)
         print("✅ Google Drive authentication successful (Service Account).")
         return drive_service
-    except FileNotFoundError:
-        print(f"❌ ERROR: Service account file not found at '{SERVICE_ACCOUNT_FILE}'.")
-        print("Please ensure 'credentials.json' is available or the environment variable is set.")
-        return None
     except Exception as e:
         print(f"❌ ERROR: Authentication failed. Details: {e}")
         return None
@@ -183,37 +184,34 @@ def upload_df_as_excel(drive_service, df, file_name, folder_id, create_pivot=Fal
                     max_row = data_ws.max_row
                     data_range = f"Data!A1:{max_col}{max_row}"
                     
+                    # --- MODIFIED PIVOT SYNTAX (Using openpyxl 3.0.10 style) ---
                     # Create the PivotTable object
-                    pt = PivotTable(range=data_range, ref="A1")
+                    pt = PivotTable(workbook, range=data_range)
                     
-                    # --- MODIFIED PIVOT FIELD SYNTAX (Using modern openpyxl 3.x style) ---
                     # Add Filters (PageFields)
                     for col in pivot_config['filters']:
                         if col in df.columns:
-                            pt.pageFields.append(col) # Just append the string name
+                            pt.addPageField(PivotField(name=col))
                         else:
                             print(f"    > [WARN] Pivot filter '{col}' not found in data.")
                     
                     # Add Rows
                     for col in pivot_config['rows']:
                         if col in df.columns:
-                            pt.rowFields.append(col) # Just append the string name
+                            pt.addRowField(PivotField(name=col))
                         else:
                             print(f"    > [WARN] Pivot row '{col}' not found in data.")
                     
                     # Add Values (DataFields)
                     for col in pivot_config['values']:
                         if col in df.columns:
-                            # For values, we use DataField to specify "sum"
-                            col_index = df.columns.get_loc(col) # Get 0-based index
-                            df_field = DataField(name=col, fld=col_index, subtotal="sum")
-                            pt.dataFields.append(df_field)
+                            pt.addDataField(PivotField(name=col, dataField=True, function='sum'))
                         else:
                             print(f"    > [WARN] Pivot value '{col}' not found in data.")
                     # --- END MODIFIED SYNTAX ---
 
                     # Add the pivot table to the sheet
-                    pivot_ws.add_pivot_table(pt)
+                    pivot_ws.add_pivot_table(pt, "A1")
                     print("    > ✅ Pivot Table sheet created successfully.")
                     
                 except Exception as e:
@@ -835,6 +833,5 @@ def check_and_copy_files(drive_service):
 if __name__ == "__main__":
     # Don't forget to install pandas: pip install pandas
     drive_service_instance = authenticate()
-    if drive_service_instance:
-        check_and_copy_files(drive_service_instance)
+    check_and_copy_files(drive_service_instance)
 
