@@ -1,23 +1,21 @@
 # Make sure to install the required libraries:
-# pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib pandas
+# pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib pandas openpyxl
 
 import datetime
 import zipfile
 import io
 import os
 from io import BytesIO
-import pandas as pd  # Added pandas
-import numpy as np # Import numpy for nan
-# Add these lines near your other imports
-import openpyxl
-from openpyxl.utils.dataframe import dataframe_to_rows
-# openpyxl and gspread imports removed
+import pandas as pd
+import numpy as np
+import openpyxl  # Added for .xlsm support
+from openpyxl.utils.dataframe import dataframe_to_rows  # Added for .xlsm support
 
 # Google API Libraries for Service Account
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
-import google.auth # Import the google.auth library
+import google.auth  # Import the google.auth library
 
 # --- Authentication ---
 
@@ -43,10 +41,10 @@ def authenticate():
         drive_service = build('drive', 'v3', credentials=creds)
         
         print("✅ Google Drive authentication successful (Service Account).")
-        return drive_service # <-- CHANGED: Return only drive_service
+        return drive_service  # <-- CHANGED: Return only drive_service
     except Exception as e:
         print(f"❌ ERROR: Authentication failed. Details: {e}")
-        return None # <-- CHANGED
+        return None  # <-- CHANGED
 
 # --- Configuration ---
 SOURCE_FOLDER_ID = '19OHXmydbNpN-zkCRiQK3FNGpSUkA_xOo'
@@ -210,8 +208,6 @@ def upload_df_as_csv(drive_service, df, file_name, folder_id):
 
 # --- NEW: Helper Function to update an existing .xlsm file ---
 
-# --- NEW: Helper Function to update an existing .xlsm file ---
-
 def update_excel_file(drive_service, df_to_paste, file_name_to_find, sheet_name_to_update, folder_id):
     """
     Finds an .xlsm file in Drive, downloads it, clears a sheet,
@@ -303,6 +299,8 @@ def update_excel_file(drive_service, df_to_paste, file_name_to_find, sheet_name_
         print(f"  [ERROR] Failed to update Excel file '{file_name_to_find}'. Details: {e}")
 
 # --- END OF NEW FUNCTION ---
+
+
 # --- Data Processing Functions ---
 
 def process_overall_instock(df_instock):
@@ -740,7 +738,7 @@ def copy_original_file(drive_service, file_id, file_name, target_folder_id):
     except Exception as e:
         print(f"  [ERROR] Failed to copy original file '{file_name}'. Details: {e}")
 
-def check_and_copy_files(drive_service): # <-- CHANGED: Removed gc
+def check_and_copy_files(drive_service):
     """Finds, copies, transforms, and extracts files using the Google Drive v3 API."""
     if not drive_service:
         print("Skipping file check as authentication failed.")
@@ -820,19 +818,18 @@ def check_and_copy_files(drive_service): # <-- CHANGED: Removed gc
         print("-------------------------------")
 
         # 5. Upload Processed DataFrames
-       # 5. Upload Processed DataFrames
-        print("\n--- Uploading Processed Files ---")
-        
-        if df_article_processed is not None:
-        # --- MODIFICATION: Call the new function to update the .xlsm file ---
-            update_excel_file(
-                drive_service=drive_service,
-                df_to_paste=df_article_processed,
-                file_name_to_find="article_sales_report.xlsm",
-s                 sheet_name_to_update="Sheet1",
-                folder_id=TARGET_FOLDER_ID
-            )
-        # --- END MODIFICATION ---
+        print("\n--- Uploading Processed Files ---")
+        
+        if df_article_processed is not None:
+            # --- MODIFICATION: Call the new function to update the .xlsm file ---
+            update_excel_file(
+                drive_service=drive_service,
+                df_to_paste=df_article_processed,
+                file_name_to_find="article_sales_report.xlsm",
+                sheet_name_to_update="Sheet1",
+                folder_id=TARGET_FOLDER_ID
+            )
+            # --- END MODIFICATION ---
         
         if df_instock_processed is not None:
             upload_df_as_csv(
@@ -866,9 +863,7 @@ s                 sheet_name_to_update="Sheet1",
 # --- Run the main function ---
 if __name__ == "__main__":
     # Don't forget to install pandas: pip install pandas
-    drive_service_instance = authenticate() # <-- CHANGED
+    drive_service_instance = authenticate()
     
-    if drive_service_instance: # <-- CHANGED
-        check_and_copy_files(drive_service_instance) # <-- CHANGED
-
-
+    if drive_service_instance:
+        check_and_copy_files(drive_service_instance)
