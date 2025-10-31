@@ -1,5 +1,5 @@
 # Make sure to install the required libraries:
-# pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib pandas openpyxl==3.0.10
+# pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib pandas
 
 import datetime
 import zipfile
@@ -8,13 +8,7 @@ import os
 from io import BytesIO
 import pandas as pd  # Added pandas
 import numpy as np # Import numpy for nan
-import openpyxl
-from openpyxl.utils import get_column_letter
-
-# --- MODIFIED IMPORTS (Using openpyxl 3.0.10 style) ---
-from openpyxl.pivot.table import PivotTable
-from openpyxl.pivot.fields import PivotField
-# --- END MODIFIED IMPORTS ---
+# openpyxl imports removed
 
 # Google API Libraries for Service Account
 from google.oauth2 import service_account
@@ -154,78 +148,25 @@ def load_file_to_df(drive_service, file_id, file_name):
         print(f"  [ERROR] Failed to load file {file_name} to DataFrame. Details: {e}")
         return None
 
-# --- NEW: Helper Function to upload a DataFrame as a CSV ---
+# --- REVERTED: Helper Function to upload a DataFrame as a CSV ---
 
-def upload_df_as_excel(drive_service, df, file_name, folder_id, create_pivot=False, pivot_config=None):
-    """Uploads a pandas DataFrame as an Excel file to Google Drive, overwriting if exists."""
+def upload_df_as_csv(drive_service, df, file_name, folder_id):
+    """Uploads a pandas DataFrame as a CSV file to Google Drive, overwriting if exists."""
     print(f"  Uploading processed file: {file_name}...")
     if df is None:
         print(f"  [ERROR] DataFrame for {file_name} is empty. Skipping upload.")
         return
 
     try:
-        # Convert DataFrame to Excel in memory
-        excel_buffer = BytesIO()
-        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-            df.to_excel(writer, sheet_name='Data', index=False)
-            
-            # --- START PIVOT TABLE CREATION ---
-            if create_pivot and pivot_config:
-                print("    > Creating Pivot Table sheet...")
-                try:
-                    workbook = writer.book
-                    data_ws = writer.sheets['Data']
-                    
-                    # Create the pivot sheet
-                    pivot_ws = workbook.create_sheet(title='Pivot')
-                    
-                    # Define the data range (e.g., "Data!A1:Z500")
-                    max_col = get_column_letter(data_ws.max_column)
-                    max_row = data_ws.max_row
-                    data_range = f"Data!A1:{max_col}{max_row}"
-                    
-                    # --- MODIFIED PIVOT SYNTAX (Using openpyxl 3.0.10 style) ---
-                    # Create the PivotTable object
-                    pt = PivotTable(workbook, range=data_range)
-                    
-                    # Add Filters (PageFields)
-                    for col in pivot_config['filters']:
-                        if col in df.columns:
-                            pt.addPageField(PivotField(name=col))
-                        else:
-                            print(f"    > [WARN] Pivot filter '{col}' not found in data.")
-                    
-                    # Add Rows
-                    for col in pivot_config['rows']:
-                        if col in df.columns:
-                            pt.addRowField(PivotField(name=col))
-                        else:
-                            print(f"    > [WARN] Pivot row '{col}' not found in data.")
-                    
-                    # Add Values (DataFields)
-                    for col in pivot_config['values']:
-                        if col in df.columns:
-                            pt.addDataField(PivotField(name=col, dataField=True, function='sum'))
-                        else:
-                            print(f"    > [WARN] Pivot value '{col}' not found in data.")
-                    # --- END MODIFIED SYNTAX ---
-
-                    # Add the pivot table to the sheet
-                    pivot_ws.add_pivot_table(pt, "A1")
-                    print("    > ✅ Pivot Table sheet created successfully.")
-                    
-                except Exception as e:
-                    print(f"    > [ERROR] Failed to create pivot table. Details: {e}")
-            # --- END PIVOT TABLE CREATION ---
-
-        excel_buffer.seek(0)
-        
-        # Define the new file name and mimetype
-        excel_file_name = file_name.replace('.csv', '.xlsx')
-        excel_mimetype = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        # Convert DataFrame to CSV in memory
+        output_buffer = io.StringIO()
+        df.to_csv(output_buffer, index=False)
+        output_buffer.seek(0)
+        csv_data_bytes = output_buffer.getvalue().encode('utf-8')
+        csv_buffer_for_upload = BytesIO(csv_data_bytes)
 
         # Check if file already exists to overwrite it
-        query = f"'{folder_id}' in parents and name='{excel_file_name}' and trashed=false"
+        query = f"'{folder_id}' in parents and name='{file_name}' and trashed=false"
         results = drive_service.files().list(
             q=query,
             fields="files(id, name)",
@@ -234,19 +175,19 @@ def upload_df_as_excel(drive_service, df, file_name, folder_id, create_pivot=Fal
         ).execute()
         existing_files = results.get('files', [])
         
-        file_metadata = {'name': excel_file_name, 'parents': [folder_id]}
-        media_body = MediaIoBaseUpload(excel_buffer, mimetype=excel_mimetype, resumable=True)
+        file_metadata = {'name': file_name, 'parents': [folder_id]}
+        media_body = MediaIoBaseUpload(csv_buffer_for_upload, mimetype='text/csv', resumable=True)
         
         if existing_files:
             file_id = existing_files[0]['id']
-            print(f"    > Overwriting existing file: {excel_file_name} (ID: {file_id})")
+            print(f"    > Overwriting existing file: {file_name} (ID: {file_id})")
             drive_service.files().update(
                 fileId=file_id,
                 media_body=media_body,
                 supportsAllDrives=True
             ).execute()
         else:
-            print(f"    > Creating new file: {excel_file_name}")
+            print(f"    > Creating new file: {file_name}")
             drive_service.files().create(
                 body=file_metadata,
                 media_body=media_body,
@@ -254,10 +195,10 @@ def upload_df_as_excel(drive_service, df, file_name, folder_id, create_pivot=Fal
                 supportsAllDrives=True
             ).execute()
             
-        print(f"  ✅ Successfully uploaded '{excel_file_name}'.")
+        print(f"  ✅ Successfully uploaded '{file_name}'.")
 
     except Exception as e:
-        print(f"  [ERROR] Failed to upload DataFrame {excel_file_name}. Details: {e}")
+        print(f"  [ERROR] Failed to upload DataFrame {file_name}. Details: {e}")
 
 # --- Data Processing Functions ---
 
@@ -777,34 +718,16 @@ def check_and_copy_files(drive_service):
         # 5. Upload Processed DataFrames
         print("\n--- Uploading Processed Files ---")
         
-        # Define the pivot table configuration
-        pivot_config = {
-            'filters': ['Sub Division', 'Sub Division_V1', 'Category', 'Market Manager'],
-            'rows': ['Region', 'Store No'], # 'Store' is not a column, 'Store No' is.
-            'values': [
-                'FTD Sale Amt', 
-                'MTD Sale Amt', 
-                'YTD Sale Amt', 
-                'On Hand Cost', 
-                'On Order Cost', 
-                'Day On Hand', # Changed from DOH
-                'FTD IM',
-                'MTD IM'
-            ]
-        }
-        
         if df_article_processed is not None:
-            upload_df_as_excel(
+            upload_df_as_csv(
                 drive_service, 
                 df_article_processed, 
                 f"ArticleSalesReport_{date_to_check_str}.csv", 
-                TARGET_FOLDER_ID,
-                create_pivot=True,
-                pivot_config=pivot_config
+                TARGET_FOLDER_ID
             )
         
         if df_instock_processed is not None:
-            upload_df_as_excel(
+            upload_df_as_csv(
                 drive_service, 
                 df_instock_processed, 
                 f"Overall_Instock_{date_to_check_str}.csv", 
