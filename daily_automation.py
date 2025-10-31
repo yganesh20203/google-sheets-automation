@@ -10,6 +10,7 @@ import pandas as pd
 import numpy as np
 import openpyxl  # Added for .xlsm support
 from openpyxl.utils.dataframe import dataframe_to_rows  # Added for .xlsm support
+import gc  # <--- ADDED: Import garbage collector
 
 # Google API Libraries for Service Account
 from google.oauth2 import service_account
@@ -820,6 +821,14 @@ def check_and_copy_files(drive_service):
         # 4. Process DataFrames
         log("\n--- Processing DataFrames ---")
         df_instock_processed = process_overall_instock(df_instock)
+        
+        # --- OPTIMIZATION: Delete raw df_instock to save memory ---
+        if 'df_instock' in locals():
+            del df_instock
+            gc.collect()
+            log("  (Memory optimization: Deleted raw instock df)")
+        # --- END OPTIMIZATION ---
+
         df_article_processed = process_article_sales_report(
             df_article, 
             df_hirarchy, 
@@ -829,6 +838,18 @@ def check_and_copy_files(drive_service):
             df_ytd_sales,
             day_of_year
         )
+        
+        # --- OPTIMIZATION: Delete all helper DFs to save memory ---
+        log("  (Memory optimization: Deleting helper dataframes...)")
+        if 'df_article' in locals(): del df_article
+        if 'df_hirarchy' in locals(): del df_hirarchy
+        if 'df_division_group' in locals(): del df_division_group
+        # Keep df_instock_processed, it's needed for the upload
+        if 'df_gst_change_list' in locals(): del df_gst_change_list
+        if 'df_ytd_sales' in locals(): del df_ytd_sales
+        gc.collect()
+        # --- END OPTIMIZATION ---
+
         log("-------------------------------")
 
         # 5. Upload Processed DataFrames
@@ -846,6 +867,13 @@ def check_and_copy_files(drive_service):
         else:
             log("  [SKIP] Skipping article_sales_report.xlsm update because processed DataFrame is empty.")
         
+        # --- OPTIMIZATION: Delete processed DFs after upload ---
+        if 'df_article_processed' in locals():
+            del df_article_processed
+            gc.collect()
+            log("  (Memory optimization: Deleted processed article df)")
+        # --- END OPTIMIZATION ---
+
         if df_instock_processed is not None:
             upload_df_as_csv(
                 drive_service, 
@@ -853,6 +881,12 @@ def check_and_copy_files(drive_service):
                 f"Overall_Instock_{date_to_find_str}.csv",  # Use the date string of the file we found
                 TARGET_FOLDER_ID
             )
+            # --- OPTIMIZATION: Delete processed DFs after upload ---
+            if 'df_instock_processed' in locals():
+                del df_instock_processed
+                gc.collect()
+                log("  (Memory optimization: Deleted processed instock df)")
+            # --- END OPTIMIZATION ---
         else:
             log("  [SKIP] Skipping Overall_Instock CSV upload because processed DataFrame is empty.")
         log("---------------------------------")
@@ -884,4 +918,5 @@ if __name__ == "__main__":
     else:
         log("❌ Halting script: Authentication failed.")
     log("--- Script execution finished ---")
+
 
