@@ -208,9 +208,11 @@ def upload_df_as_csv(drive_service, df, file_name, folder_id):
 
 # --- NEW: Helper Function to update an existing .xlsm file ---
 
+# --- UPDATED: Helper Function to update an existing .xlsx file ---
+
 def update_excel_file(drive_service, df_to_paste, file_name_to_find, sheet_name_to_update, folder_id):
     """
-    Finds an .xlsm file in Drive, downloads it, clears a sheet,
+    Finds an .xlsx file in Drive, downloads it, clears a sheet,
     pastes a DataFrame, and re-uploads (updates) the file.
     """
     print(f"\n--- Updating Excel File: {file_name_to_find} ---")
@@ -219,7 +221,7 @@ def update_excel_file(drive_service, df_to_paste, file_name_to_find, sheet_name_
         return
 
     try:
-        # 1. Find the .xlsm file
+        # 1. Find the .xlsx file
         print(f"  Searching for '{file_name_to_find}' in folder ID: {folder_id}...")
         query = f"'{folder_id}' in parents and name='{file_name_to_find}' and trashed=false"
         results = drive_service.files().list(
@@ -251,9 +253,10 @@ def update_excel_file(drive_service, df_to_paste, file_name_to_find, sheet_name_
         excel_file_buffer.seek(0)
 
         # 3. Load workbook, modify sheet, and save
-        print(f"  Opening workbook (keep_vba=True)...")
-        # keep_vba=True is ESSENTIAL for .xlsm files
-        wb = openpyxl.load_workbook(excel_file_buffer, keep_vba=True)
+        print(f"  Opening workbook...")
+        # --- CHANGE ---
+        # keep_vba=True has been removed as this is now an .xlsx file
+        wb = openpyxl.load_workbook(excel_file_buffer)
         
         if sheet_name_to_update not in wb.sheetnames:
             print(f"  [ERROR] Sheet '{sheet_name_to_update}' not found in workbook.")
@@ -280,10 +283,11 @@ def update_excel_file(drive_service, df_to_paste, file_name_to_find, sheet_name_
 
         # 4. Re-upload (update) the file in Google Drive
         print(f"  Uploading updated file back to Drive...")
-        # This MIME type is correct for .xlsm
+        # --- CHANGE ---
+        # This is the correct MIME type for .xlsx files
         media_body = MediaIoBaseUpload(
             output_excel_buffer, 
-            mimetype='application/vnd.ms-excel.sheet.macroEnabled.12', 
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 
             resumable=True
         )
         
@@ -298,8 +302,7 @@ def update_excel_file(drive_service, df_to_paste, file_name_to_find, sheet_name_
     except Exception as e:
         print(f"  [ERROR] Failed to update Excel file '{file_name_to_find}'. Details: {e}")
 
-# --- END OF NEW FUNCTION ---
-
+# --- END OF UPDATED FUNCTION ---
 
 # --- Data Processing Functions ---
 
@@ -825,7 +828,7 @@ def check_and_copy_files(drive_service):
             update_excel_file(
                 drive_service=drive_service,
                 df_to_paste=df_article_processed,
-                file_name_to_find="article_sales_report.xlsm",
+                file_name_to_find="article_sales_report.xlsx",
                 sheet_name_to_update="Sheet1",
                 folder_id=TARGET_FOLDER_ID
             )
