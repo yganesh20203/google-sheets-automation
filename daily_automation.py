@@ -210,6 +210,8 @@ def upload_df_as_csv(drive_service, df, file_name, folder_id):
 
 # --- NEW: Helper Function to update an existing .xlsm file ---
 
+# --- NEW: Helper Function to update an existing .xlsm file ---
+
 def update_excel_file(drive_service, df_to_paste, file_name_to_find, sheet_name_to_update, folder_id):
     """
     Finds an .xlsm file in Drive, downloads it, clears a sheet,
@@ -301,7 +303,6 @@ def update_excel_file(drive_service, df_to_paste, file_name_to_find, sheet_name_
         print(f"  [ERROR] Failed to update Excel file '{file_name_to_find}'. Details: {e}")
 
 # --- END OF NEW FUNCTION ---
-
 # --- Data Processing Functions ---
 
 def process_overall_instock(df_instock):
