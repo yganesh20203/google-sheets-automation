@@ -41,10 +41,10 @@ def authenticate():
         drive_service = build('drive', 'v3', credentials=creds)
         
         print("✅ Google Drive authentication successful (Service Account).")
-        return drive_service  # <-- CHANGED: Return only drive_service
+        return drive_service
     except Exception as e:
         print(f"❌ ERROR: Authentication failed. Details: {e}")
-        return None  # <-- CHANGED
+        return None
 
 # --- Configuration ---
 SOURCE_FOLDER_ID = '19OHXmydbNpN-zkCRiQK3FNGpSUkA_xOo'
@@ -83,11 +83,9 @@ def download_csv_to_df(drive_service, file_name, folder_id):
         file_content_buffer.seek(0)
         # Try to read with utf-8, fall back to latin1 if it fails
         try:
-            # --- REVERTED: No longer forcing dtype=str ---
             df = pd.read_csv(file_content_buffer)
         except UnicodeDecodeError:
             file_content_buffer.seek(0)
-            # --- REVERTED: No longer forcing dtype=str ---
             df = pd.read_csv(file_content_buffer, encoding='latin1')
             print(f"  [INFO] Read '{file_name}' with 'latin1' encoding.")
 
@@ -139,11 +137,9 @@ def load_file_to_df(drive_service, file_id, file_name):
         # Now, load the bytes into a DataFrame
         if csv_data_bytes:
             try:
-                # --- REVERTED: No longer forcing dtype=str ---
                 df = pd.read_csv(BytesIO(csv_data_bytes))
             except UnicodeDecodeError:
                 print("      - Retrying with 'latin1' encoding.")
-                # --- REVERTED: No longer forcing dtype=str ---
                 df = pd.read_csv(BytesIO(csv_data_bytes), encoding='latin1')
             print(f"  ✅ Successfully loaded '{file_name}' into DataFrame.")
             return df
@@ -206,13 +202,12 @@ def upload_df_as_csv(drive_service, df, file_name, folder_id):
     except Exception as e:
         print(f"  [ERROR] Failed to upload DataFrame {file_name}. Details: {e}")
 
-# --- NEW: Helper Function to update an existing .xlsm file ---
 
-# --- UPDATED: Helper Function to update an existing .xlsx file ---
+# --- UPDATED: Helper Function to update an existing .xlsm file ---
 
 def update_excel_file(drive_service, df_to_paste, file_name_to_find, sheet_name_to_update, folder_id):
     """
-    Finds an .xlsx file in Drive, downloads it, clears a sheet,
+    Finds an .xlsm file in Drive, downloads it, clears a sheet,
     pastes a DataFrame, and re-uploads (updates) the file.
     """
     print(f"\n--- Updating Excel File: {file_name_to_find} ---")
@@ -221,7 +216,7 @@ def update_excel_file(drive_service, df_to_paste, file_name_to_find, sheet_name_
         return
 
     try:
-        # 1. Find the .xlsx file
+        # 1. Find the .xlsm file
         print(f"  Searching for '{file_name_to_find}' in folder ID: {folder_id}...")
         query = f"'{folder_id}' in parents and name='{file_name_to_find}' and trashed=false"
         results = drive_service.files().list(
@@ -253,10 +248,10 @@ def update_excel_file(drive_service, df_to_paste, file_name_to_find, sheet_name_
         excel_file_buffer.seek(0)
 
         # 3. Load workbook, modify sheet, and save
-        print(f"  Opening workbook...")
+        print(f"  Opening workbook (keep_vba=True)...")
         # --- CHANGE ---
-        # keep_vba=True has been removed as this is now an .xlsx file
-        wb = openpyxl.load_workbook(excel_file_buffer)
+        # keep_vba=True is ESSENTIAL for .xlsm files
+        wb = openpyxl.load_workbook(excel_file_buffer, keep_vba=True)
         
         if sheet_name_to_update not in wb.sheetnames:
             print(f"  [ERROR] Sheet '{sheet_name_to_update}' not found in workbook.")
@@ -284,10 +279,10 @@ def update_excel_file(drive_service, df_to_paste, file_name_to_find, sheet_name_
         # 4. Re-upload (update) the file in Google Drive
         print(f"  Uploading updated file back to Drive...")
         # --- CHANGE ---
-        # This is the correct MIME type for .xlsx files
+        # This is the correct MIME type for .xlsm
         media_body = MediaIoBaseUpload(
             output_excel_buffer, 
-            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 
+            mimetype='application/vnd.ms-excel.sheet.macroEnabled.12', 
             resumable=True
         )
         
@@ -304,6 +299,7 @@ def update_excel_file(drive_service, df_to_paste, file_name_to_find, sheet_name_
 
 # --- END OF UPDATED FUNCTION ---
 
+
 # --- Data Processing Functions ---
 
 def process_overall_instock(df_instock):
@@ -315,7 +311,6 @@ def process_overall_instock(df_instock):
     try:
         if 'Store Nbr' in df_instock.columns and 'Old Nbr' in df_instock.columns:
             
-            # --- REVERTED: Simple astype(str) conversion ---
             store_nbr_str = df_instock['Store Nbr'].astype(str)
             old_nbr_str = df_instock['Old Nbr'].astype(str)
 
@@ -347,7 +342,6 @@ def process_article_sales_report(df_article, df_hirarchy, df_division_group, df_
         if 'Article No' in df_article.columns and 'Store No' in df_article.columns:
             article_no_col_index = df_article.columns.get_loc('Article No')
             
-            # --- REVERTED: Simple astype(str) conversion ---
             store_no_str = df_article['Store No'].astype(str)
             article_no_str = df_article['Article No'].astype(str)
 
@@ -373,7 +367,6 @@ def process_article_sales_report(df_article, df_hirarchy, df_division_group, df_
                     print(f"      - [WARN] Neither 'Store' nor 'Store No' found. Appending Region/Manager to the end.")
                     store_col_index = len(df_article.columns) - 1
                 
-                # --- REVERTED: Simple astype(str) conversion ---
                 df_article['Store No'] = df_article['Store No'].astype(str)
                 df_hirarchy['Location'] = df_hirarchy['Location'].astype(str)
 
@@ -413,7 +406,6 @@ def process_article_sales_report(df_article, df_hirarchy, df_division_group, df_
                 sub_div_col_index = df_article.columns.get_loc('Sub Division')
                 original_cols = list(df_article.columns)
                 
-                # --- REVERTED: Simple astype(str) conversion ---
                 df_article['Sub Division'] = df_article['Sub Division'].astype(str)
                 df_division_group['Sub Division'] = df_division_group['Sub Division'].astype(str)
                 
@@ -492,7 +484,6 @@ def process_article_sales_report(df_article, df_hirarchy, df_division_group, df_
                 # Prepare GST list for merge
                 df_gst_prepared = df_gst_change_list[['UID']].copy()
                 df_gst_prepared['GST_Change'] = 'Yes'
-                # --- REVERTED: Simple astype(str) conversion ---
                 df_gst_prepared['UID'] = df_gst_prepared['UID'].astype(str)
                 
                 # Get original columns for re-ordering
@@ -546,7 +537,6 @@ def process_article_sales_report(df_article, df_hirarchy, df_division_group, df_
                 
                 original_cols = list(df_article.columns)
                 
-                # --- REVERTED: Simple astype(str) conversion ---
                 df_article['Article UID'] = df_article['Article UID'].astype(str)
                 df_ytd_sales['Article UID'] = df_ytd_sales['Article UID'].astype(str)
 
@@ -699,7 +689,7 @@ def process_article_sales_report(df_article, df_hirarchy, df_division_group, df_
             df_article = df_article[df_article['Store'].astype(str).str.strip().str.lower() != 'lucknow fc']
             print(f"      - Filtered rows where Store is 'Lucknow FC'.")
         else:
-            print("      - [WARN] 'Store' column not found. Skipping 'Lucknow FC' filter.")
+            print("      - [WARN] 'Store' column not found. Skipping 'LuckWnow FC' filter.")
             
         final_row_count = len(df_article)
         print(f"      - Row filtering complete. Removed {initial_row_count - final_row_count} rows.")
@@ -824,11 +814,11 @@ def check_and_copy_files(drive_service):
         print("\n--- Uploading Processed Files ---")
         
         if df_article_processed is not None:
-            # --- MODIFICATION: Call the new function to update the .xlsm file ---
+            # --- MODIFICATION: Call the function to update the .xlsm file ---
             update_excel_file(
                 drive_service=drive_service,
                 df_to_paste=df_article_processed,
-                file_name_to_find="article_sales_report.xlsx",
+                file_name_to_find="article_sales_report.xlsm",  # <-- CHANGED HERE
                 sheet_name_to_update="Sheet1",
                 folder_id=TARGET_FOLDER_ID
             )
@@ -865,7 +855,6 @@ def check_and_copy_files(drive_service):
 
 # --- Run the main function ---
 if __name__ == "__main__":
-    # Don't forget to install pandas: pip install pandas
     drive_service_instance = authenticate()
     
     if drive_service_instance:
