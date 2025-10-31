@@ -8,7 +8,7 @@ import os
 from io import BytesIO
 import pandas as pd  # Added pandas
 import numpy as np # Import numpy for nan
-# openpyxl imports removed
+# openpyxl and gspread imports removed
 
 # Google API Libraries for Service Account
 from google.oauth2 import service_account
@@ -24,8 +24,10 @@ import google.auth # Import the google.auth library
 SERVICE_ACCOUNT_FILE = 'credentials.json'
 # --- END MODIFICATION FOR GITHUB ACTIONS ---
 
-# Define the necessary scopes. We need full drive access to read and write.
-SCOPES = ['https://www.googleapis.com/auth/drive']
+# Define the necessary scopes. We only need drive access.
+SCOPES = [
+    'https://www.googleapis.com/auth/drive'
+]
 
 def authenticate():
     """Authenticates using the service account file."""
@@ -33,12 +35,15 @@ def authenticate():
         # The script will automatically find the credentials file
         # using the GOOGLE_APPLICATION_CREDENTIALS environment variable
         creds, _ = google.auth.default(scopes=SCOPES)
+        
+        # Auth for Google Drive API
         drive_service = build('drive', 'v3', credentials=creds)
+        
         print("✅ Google Drive authentication successful (Service Account).")
-        return drive_service
+        return drive_service # <-- CHANGED: Return only drive_service
     except Exception as e:
         print(f"❌ ERROR: Authentication failed. Details: {e}")
-        return None
+        return None # <-- CHANGED
 
 # --- Configuration ---
 SOURCE_FOLDER_ID = '19OHXmydbNpN-zkCRiQK3FNGpSUkA_xOo'
@@ -637,7 +642,7 @@ def copy_original_file(drive_service, file_id, file_name, target_folder_id):
     except Exception as e:
         print(f"  [ERROR] Failed to copy original file '{file_name}'. Details: {e}")
 
-def check_and_copy_files(drive_service):
+def check_and_copy_files(drive_service): # <-- CHANGED: Removed gc
     """Finds, copies, transforms, and extracts files using the Google Drive v3 API."""
     if not drive_service:
         print("Skipping file check as authentication failed.")
@@ -652,12 +657,13 @@ def check_and_copy_files(drive_service):
     print("---------------------------------")
 
     try:
-        # --- MODIFICATION: Look for yesterday's date ---
+        # --- MODIFICATION: Look for today's files, but use yesterday's day count for calcs ---
         today = datetime.date.today()
         yesterday = today - datetime.timedelta(days=1)
-        date_to_check_str = yesterday.strftime('%Y-%m-%d')
+        date_to_check_str = today.strftime('%Y-%m-%d') # Use today's date for filenames
         day_of_year = yesterday.timetuple().tm_yday # Get day of the year
-        print(f"--- Starting daily file check for {date_to_check_str} (Day {day_of_year} of the year) ---")
+        print(f"--- Starting daily file check for {date_to_check_str} (Today's Date) ---")
+        print(f"--- Using Day {day_of_year} (yesterday's day number) for average calculations ---")
         
         # 2. Find file IDs and names first
         file_info = {} # To store {'ArticleSalesReport': (id, name), ...}
@@ -722,7 +728,7 @@ def check_and_copy_files(drive_service):
             upload_df_as_csv(
                 drive_service, 
                 df_article_processed, 
-                f"ArticleSalesReport_{date_to_check_str}.csv", 
+                "article_sales_report.csv", # <-- CHANGED: Filename is now constant
                 TARGET_FOLDER_ID
             )
         
@@ -735,7 +741,10 @@ def check_and_copy_files(drive_service):
             )
         print("---------------------------------")
         
-        # 6. Copy Original Files
+        # --- REMOVED STEP 6 (Upload to Google Sheet) ---
+
+
+        # 6. Copy Original Files (now step 6)
         print("\n--- Copying Original Source Files ---")
         if 'ArticleSalesReport' in file_info:
             file_id, file_name = file_info['ArticleSalesReport']
@@ -755,6 +764,9 @@ def check_and_copy_files(drive_service):
 # --- Run the main function ---
 if __name__ == "__main__":
     # Don't forget to install pandas: pip install pandas
-    drive_service_instance = authenticate()
-    check_and_copy_files(drive_service_instance)
+    drive_service_instance = authenticate() # <-- CHANGED
+    
+    if drive_service_instance: # <-- CHANGED
+        check_and_copy_files(drive_service_instance) # <-- CHANGED
+
 
