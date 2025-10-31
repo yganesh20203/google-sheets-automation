@@ -922,6 +922,4 @@ if __name__ == "__main__":
     else:
         log("❌ Halting script: Authentication failed.")
     log("--- Script execution finished ---")
-" in the document and am asking a query about/based on this code below.
-is it possible to download the file directly in a folder which i have given trusted access instead of google drive
 
