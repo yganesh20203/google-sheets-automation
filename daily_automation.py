@@ -8,6 +8,9 @@ import os
 from io import BytesIO
 import pandas as pd  # Added pandas
 import numpy as np # Import numpy for nan
+# Add these lines near your other imports
+import openpyxl
+from openpyxl.utils.dataframe import dataframe_to_rows
 # openpyxl and gspread imports removed
 
 # Google API Libraries for Service Account
@@ -204,6 +207,100 @@ def upload_df_as_csv(drive_service, df, file_name, folder_id):
 
     except Exception as e:
         print(f"  [ERROR] Failed to upload DataFrame {file_name}. Details: {e}")
+
+# --- NEW: Helper Function to update an existing .xlsm file ---
+
+def update_excel_file(drive_service, df_to_paste, file_name_to_find, sheet_name_to_update, folder_id):
+    """
+    Finds an .xlsm file in Drive, downloads it, clears a sheet,
+    pastes a DataFrame, and re-uploads (updates) the file.
+    """
+    print(f"\n--- Updating Excel File: {file_name_to_find} ---")
+    if df_to_paste is None:
+        print(f"  [ERROR] DataFrame is empty. Skipping Excel update.")
+        return
+
+    try:
+        # 1. Find the .xlsm file
+        print(f"  Searching for '{file_name_to_find}' in folder ID: {folder_id}...")
+        query = f"'{folder_id}' in parents and name='{file_name_to_find}' and trashed=false"
+        results = drive_service.files().list(
+            q=query,
+            fields="files(id, name)",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True
+        ).execute()
+        existing_files = results.get('files', [])
+        
+        if not existing_files:
+            print(f"  [ERROR] Excel file '{file_name_to_find}' not found in target folder.")
+            return
+
+        file_id = existing_files[0]['id']
+        file_name = existing_files[0]['name']
+        print(f"  Found file: {file_name} (ID: {file_id})")
+
+        # 2. Download the file content
+        print(f"  Downloading '{file_name}'...")
+        request = drive_service.files().get_media(fileId=file_id, supportsAllDrives=True)
+        excel_file_buffer = BytesIO()
+        downloader = MediaIoBaseDownload(excel_file_buffer, request)
+        
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+        
+        excel_file_buffer.seek(0)
+
+        # 3. Load workbook, modify sheet, and save
+        print(f"  Opening workbook (keep_vba=True)...")
+        # keep_vba=True is ESSENTIAL for .xlsm files
+        wb = openpyxl.load_workbook(excel_file_buffer, keep_vba=True)
+        
+        if sheet_name_to_update not in wb.sheetnames:
+            print(f"  [ERROR] Sheet '{sheet_name_to_update}' not found in workbook.")
+            return
+
+        ws = wb[sheet_name_to_update]
+        
+        # Clear all existing data from the sheet
+        print(f"  Clearing all data from sheet: '{sheet_name_to_update}'...")
+        if ws.max_row > 0:
+            ws.delete_rows(1, ws.max_row) 
+
+        # Paste the DataFrame (header + data)
+        print(f"  Pasting {len(df_to_paste)} rows into sheet...")
+        for r in dataframe_to_rows(df_to_paste, index=False, header=True):
+            ws.append(r)
+        
+        # Save the modified workbook to a new in-memory buffer
+        print(f"  Saving changes to memory...")
+        output_excel_buffer = BytesIO()
+        wb.save(output_excel_buffer)
+        output_excel_buffer.seek(0)
+        wb.close()
+
+        # 4. Re-upload (update) the file in Google Drive
+        print(f"  Uploading updated file back to Drive...")
+        # This MIME type is correct for .xlsm
+        media_body = MediaIoBaseUpload(
+            output_excel_buffer, 
+            mimetype='application/vnd.ms-excel.sheet.macroEnabled.12', 
+            resumable=True
+        )
+        
+        drive_service.files().update(
+            fileId=file_id,
+            media_body=media_body,
+            supportsAllDrives=True
+        ).execute()
+        
+        print(f"  ✅ Successfully updated '{file_name_to_find}' in Google Drive.")
+
+    except Exception as e:
+        print(f"  [ERROR] Failed to update Excel file '{file_name_to_find}'. Details: {e}")
+
+# --- END OF NEW FUNCTION ---
 
 # --- Data Processing Functions ---
 
@@ -722,15 +819,19 @@ def check_and_copy_files(drive_service): # <-- CHANGED: Removed gc
         print("-------------------------------")
 
         # 5. Upload Processed DataFrames
-        print("\n--- Uploading Processed Files ---")
-        
-        if df_article_processed is not None:
-            upload_df_as_csv(
-                drive_service, 
-                df_article_processed, 
-                "article_sales_report.csv", # <-- CHANGED: Filename is now constant
-                TARGET_FOLDER_ID
-            )
+       # 5. Upload Processed DataFrames
+        print("\n--- Uploading Processed Files ---")
+        
+        if df_article_processed is not None:
+        # --- MODIFICATION: Call the new function to update the .xlsm file ---
+            update_excel_file(
+                drive_service=drive_service,
+                df_to_paste=df_article_processed,
+                file_name_to_find="article_sales_report.xlsm",
+s                 sheet_name_to_update="Sheet1",
+                folder_id=TARGET_FOLDER_ID
+            )
+        # --- END MODIFICATION ---
         
         if df_instock_processed is not None:
             upload_df_as_csv(
