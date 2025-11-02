@@ -9,7 +9,7 @@ import pandas as pd
 import math
 from datetime import datetime
 import numpy as np
-import json # Added for loading credentials from a string
+import json 
 
 # Google Drive Imports
 from google.oauth2 import service_account
@@ -20,6 +20,9 @@ from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 import openpyxl
 from openpyxl.utils.dataframe import dataframe_to_rows
 
+# <--- NEW: Import gspread for Google Sheets
+import gspread
+
 # Suppress security warnings for unverified HTTPS requests
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
@@ -27,6 +30,8 @@ requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 # ==============================================================================
 # 3. COMMON HELPER FUNCTIONS (for Pillow)
 # ==============================================================================
+
+# ... (all helper functions: remove_white_background, wrap_text, create_shadow, etc. remain unchanged) ...
 
 # Function to remove white background
 def remove_white_background(image, tolerance=20):
@@ -101,34 +106,44 @@ def draw_halftone_pattern(draw, width, height, color, step=30, dot_size=3):
         for y in range(0, height, step):
             draw.ellipse((x, y, x + dot_size, y + dot_size), fill=color)
 
+
 # ==============================================================================
-# 4. GOOGLE DRIVE HELPER FUNCTIONS
+# 4. GOOGLE DRIVE & SHEETS HELPER FUNCTIONS
 # ==============================================================================
 
-SCOPES = ['https://www.googleapis.com/auth/drive']
+# <--- NEW: Added Google Sheets scope
+SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
 
 def authenticate_service_account():
-    """Authenticates with Google Drive API using a service account JSON string from an env variable."""
+    """Authenticates with Google APIs using a service account JSON string from an env variable."""
     try:
         creds_json_string = os.environ.get('GCP_SA_KEY')
         if not creds_json_string:
             print("❌ CRITICAL ERROR: 'GCP_SA_KEY' environment variable not set.")
             print("Please ensure this secret is set in your GitHub repository settings.")
-            return None
+            return None, None
         
         creds_info = json.loads(creds_json_string)
         
+        # <--- NEW: Use the creds_info to build the credentials object
         creds = service_account.Credentials.from_service_account_info(
             creds_info, scopes=SCOPES)
-        service = build('drive', 'v3', credentials=creds)
+        
+        # Build Drive service
+        drive_service = build('drive', 'v3', credentials=creds)
         print("✅ Google Drive authentication successful.")
-        return service
+        
+        # <--- NEW: Return both the Drive service and the credentials object (for gspread)
+        return drive_service, creds 
+        
     except json.JSONDecodeError:
         print("❌ CRITICAL ERROR: 'GCP_SA_KEY' is not a valid JSON string.")
-        return None
+        return None, None
     except Exception as e:
-        print(f"❌ Error authenticating with Google Drive: {e}")
-        return None
+        print(f"❌ Error authenticating with Google APIs: {e}")
+        return None, None
+
+# ... (clear_drive_folder, find_or_create_folder, upload_file_to_drive, get_file_id_from_folder, download_file_from_drive, update_file_in_drive functions remain unchanged) ...
 
 def clear_drive_folder(service, folder_id):
     """Deletes all files and folders within a specific Google Drive folder."""
@@ -194,8 +209,6 @@ def upload_file_to_drive(service, local_file_path, drive_folder_id, drive_file_n
     except Exception as e:
         print(f"❌ Error uploading file '{drive_file_name}' to Google Drive: {e}")
 
-# --- NEW HELPER FUNCTIONS ---
-
 def get_file_id_from_folder(service, folder_id, file_name):
     """Finds a file's ID by its name within a specific folder."""
     try:
@@ -225,7 +238,7 @@ def download_file_from_drive(service, file_id, local_path):
         print(f"✅ Download complete: {local_path}")
     except Exception as e:
         print(f"❌ Error downloading file (ID: {file_id}) to '{local_path}': {e}")
-        raise # Re-raise the exception to stop the script if a file is missing
+        raise
 
 def update_file_in_drive(service, local_file_path, file_id, mime_type):
     """Updates an existing file in Google Drive with a new local version."""
@@ -240,10 +253,37 @@ def update_file_in_drive(service, local_file_path, file_id, mime_type):
     except Exception as e:
         print(f"❌ Error updating file '{os.path.basename(local_file_path)}' in Drive: {e}")
 
+# <--- NEW: Function to update the Google Sheet log
+def update_poster_counts_sheet(creds, counts_dict, sheet_id):
+    """Logs the poster counts per store to a Google Sheet."""
+    print("\n--- Updating Poster Count Log Sheet ---")
+    try:
+        # Authorize gspread with the credentials
+        gc = gspread.authorize(creds)
+        
+        # Open the Google Sheet by its ID
+        sh = gc.open_by_key(sheet_id)
+        worksheet = sh.worksheet('Sheet1') # Assumes the sheet name is 'Sheet1'
+        
+        # Format the data for writing
+        data_to_write = [['Store Name', 'No. of posters']]
+        for store, count in counts_dict.items():
+            data_to_write.append([store, count])
+        
+        # Clear the sheet and update it with the new data
+        worksheet.clear()
+        worksheet.update('A1', data_to_write)
+        
+        print(f"✅ Successfully updated Google Sheet with {len(data_to_write) - 1} store counts.")
+    except Exception as e:
+        print(f"❌ Error updating Google Sheet: {e}")
+
+
 # ==============================================================================
 # 5. POSTER FUNCTION 1 (DEFAULT - Orange Theme)
 # ==============================================================================
 
+# ... (create_poster_default function remains unchanged) ...
 def create_poster_default(image_path, product_name, price, selling_price, discount_percent, logo_path, company_name, location, output_path, log_file_path):
     # --- Poster Configuration ---
     DPI = 300
@@ -474,6 +514,7 @@ def create_poster_default(image_path, product_name, price, selling_price, discou
 # 6. POSTER FUNCTION 2 (SPECIAL STORES - Muted/Red Theme)
 # ==============================================================================
 
+# ... (create_poster_special_stores function remains unchanged) ...
 def create_poster_special_stores(image_path, product_name, price, selling_price, discount_percent, logo_path, company_name, location, output_path, log_file_path):
     # --- Poster Configuration ---
     DPI = 300
@@ -723,26 +764,17 @@ def main():
     try:
         # --- PATH CONFIGURATION ---
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        
-        # Output folder will store logs, temp files, and downloaded inputs
         output_folder_path = os.path.join(script_dir, 'output')
-        
         os.makedirs(output_folder_path, exist_ok=True)
         print(f"Using local output/temp folder: {output_folder_path}")
         
         # --- GOOGLE DRIVE CONFIGURATION ---
-        # *** THIS IS YOUR NEW DATA FOLDER ***
         DATA_FOLDER_ID = '1J2epmcfA8hT8YFk4Q7G9LM3qLZzw3W_H'
-        
-        # PARENT_DRIVE_FOLDER_ID is for *poster uploads*
         PARENT_DRIVE_FOLDER_ID = os.environ.get('PARENT_DRIVE_FOLDER_ID')
         if not PARENT_DRIVE_FOLDER_ID:
             print("❌ CRITICAL ERROR: 'PARENT_DRIVE_FOLDER_ID' environment variable not set.")
-            print("Please set this in your GitHub repository secrets or variables.")
             exit()
             
-        # --- File Names in Google Drive ---
-        # These *must* match the names in your Drive folder
         FILE_CONFIG = {
             'poster_raw_data.xlsx': {'id': None, 'mime': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'},
             'offer_articles.csv': {'id': None, 'mime': 'text/csv'},
@@ -753,19 +785,16 @@ def main():
             'Lato-Black.ttf': {'id': None, 'mime': 'font/ttf'},
         }
 
-        # --- Local File Paths (will be in the 'output' folder) ---
+        # --- Local File Paths ---
         poster_raw_data_path = os.path.join(output_folder_path, 'poster_raw_data.xlsx')
         offer_articles_csv_path = os.path.join(output_folder_path, 'offer_articles.csv')
         check_offer_excel_path = os.path.join(output_folder_path, 'check_offer.xlsx')
         product_images_path = os.path.join(output_folder_path, 'product_images_1.xlsx')
         logo_path = os.path.join(output_folder_path, 'logo_1.png')
-        # Fonts are also downloaded to output_folder_path
         
-        # Log File Paths
         log_file_path = os.path.join(output_folder_path, 'failed_images.log')
         audit_log_path = os.path.join(output_folder_path, 'price_comparison_audit_log.xlsx')
         
-        # --- STORE CONFIGURATION ---
         special_store_list = [
             'Flipkart Wholesale Amritsar', 
             'Flipkart Wholesale Jammu', 
@@ -777,9 +806,11 @@ def main():
         # ======================================================
         print("\n--- Starting Google Drive Authentication & Download ---")
         
-        drive_service = authenticate_service_account()
-        if not drive_service:
-            print("❌ Halting script due to Google Drive authentication failure.")
+        # <--- NEW: Get both Drive service and gspread credentials
+        drive_service, gsheet_creds = authenticate_service_account()
+        
+        if not drive_service or not gsheet_creds:
+            print("❌ Halting script due to Google API authentication failure.")
             exit()
 
         print(f"Downloading all input files from Drive Folder ID: {DATA_FOLDER_ID}...")
@@ -792,7 +823,6 @@ def main():
                 download_file_from_drive(drive_service, file_id, local_path)
             else:
                 print(f"❌ CRITICAL ERROR: File '{file_name}' not found in Google Drive folder.")
-                print("Please ensure all 7 required files are in the folder and named correctly.")
                 exit()
         
         print("✅ All input files downloaded successfully.")
@@ -800,6 +830,8 @@ def main():
         # ======================================================
         # --- 1. PRE-PROCESSING STEP ---
         # ======================================================
+        
+        # ... (Pre-processing logic remains unchanged) ...
         print("\n--- Starting Pre-processing Step ---")
         
         print(f"Loading '{poster_raw_data_path}'...")
@@ -828,7 +860,7 @@ def main():
         matches_found = merged_offers_df['Raw_mrp'].notna().sum()
         print(f"-> SUCCESS: Found {matches_found} matching rows between the two files.")
         if matches_found == 0:
-            print("-> WARNING: No matches found. Check 'key' columns in 'price_comparison_audit_log.xlsx' for issues.")
+            print("-> WARNING: No matches found.")
 
         print("Comparing prices to find discrepancies...")
         
@@ -893,7 +925,6 @@ def main():
 
         final_df_to_write = mismatched_rows_df.reindex(columns=original_check_offer_headers)
         
-        # --- Rewrite 'check_offer.xlsx' LOCALLY ---
         print(f"Updating '{check_offer_excel_path}' locally with {len(final_df_to_write)} mismatched rows...")
         book = openpyxl.load_workbook(check_offer_excel_path)
         sheet = book.active
@@ -903,13 +934,11 @@ def main():
         book.save(check_offer_excel_path)
         print(f"✅ Successfully updated '{check_offer_excel_path}' locally.")
         
-        # --- *** NEW: UPLOAD 'check_offer.xlsx' back to Drive *** ---
         update_file_in_drive(drive_service, 
                              check_offer_excel_path, 
                              FILE_CONFIG['check_offer.xlsx']['id'], 
                              FILE_CONFIG['check_offer.xlsx']['mime'])
 
-        # --- *** NEW: UPDATE AND OVERWRITE 'offer_articles.csv' *** ---
         print(f"Updating source file '{offer_articles_csv_path}' with new prices...")
         
         full_new_mrp = pd.to_numeric(merged_offers_df['Raw_mrp'], errors='coerce')
@@ -942,11 +971,9 @@ def main():
         
         final_csv_df = merged_offers_df[original_csv_columns]
         
-        # Save back to the CSV LOCALLY
         final_csv_df.to_csv(offer_articles_csv_path, index=False)
         print(f"✅ Successfully overwrote '{offer_articles_csv_path}' locally.")
         
-        # --- *** NEW: UPLOAD 'offer_articles.csv' back to Drive *** ---
         update_file_in_drive(drive_service, 
                              offer_articles_csv_path, 
                              FILE_CONFIG['offer_articles.csv']['id'], 
@@ -954,15 +981,14 @@ def main():
         
         print("--- Pre-processing Step Complete ---")
 
+
         # ======================================================
         # --- 2. POSTER GENERATION ---
         # ======================================================
         print("\n--- Starting Poster Generation Step ---")
 
-        # --- Clear POSTER (Output) Google Drive Folder ---
         clear_drive_folder(drive_service, PARENT_DRIVE_FOLDER_ID)
 
-        # --- Load the UPDATED 'check_offer.xlsx' file (from local copy) ---
         print(f"\nReading UPDATED '{check_offer_excel_path}' for poster generation...")
         offer_articles_df_for_posters = pd.read_excel(check_offer_excel_path, header=0, engine='openpyxl')
         
@@ -983,13 +1009,15 @@ def main():
         company = "Best Price"
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
+        # <--- NEW: Initialize dictionary to store poster counts
+        store_poster_counts = {}
+        
         # --- Main Generation Loop ---
         for index, row in merged_df_for_posters.iterrows():
             try:
                 store_location = row['Storename']
                 
                 safe_store_name = "".join([c for c in str(store_location) if c.isalnum() or c in (' ', '-')]).rstrip()
-                # Local output folder for this store
                 store_folder_path = os.path.join(output_folder_path, safe_store_name)
                 os.makedirs(store_folder_path, exist_ok=True)
                 
@@ -1015,7 +1043,7 @@ def main():
                         price=row['current mrp'],
                         selling_price=row['selling price'],
                         discount_percent=row['discount %'],
-                        logo_path=logo_path, # This is the local path in 'output/'
+                        logo_path=logo_path,
                         company_name=company,
                         location=store_location,
                         output_path=output_filepath,
@@ -1032,7 +1060,7 @@ def main():
                         price=row['current mrp'],
                         selling_price=row['selling price'],
                         discount_percent=row['discount %'],
-                        logo_path=logo_path, # This is the local path in 'output/'
+                        logo_path=logo_path,
                         company_name=company,
                         location=store_location,
                         output_path=output_filepath,
@@ -1040,6 +1068,9 @@ def main():
                     )
                 
                 print(f"-> Saved locally: {output_filepath}")
+
+                # <--- NEW: Increment the poster count for this store
+                store_poster_counts[store_location] = store_poster_counts.get(store_location, 0) + 1
 
                 # --- Upload to Google Drive ---
                 print(f"-> Uploading '{filename}' to Google Drive...")
@@ -1060,6 +1091,13 @@ def main():
                 
         print("\n✅ All posters have been processed.")
         
+        # <--- NEW: Update Google Sheet Log after the loop
+        if store_poster_counts:
+            SHEET_ID = '1pE6hMcP04nmvcGrM6AKBvznC-d0B8_oZnW6kfT5hJDA'
+            update_poster_counts_sheet(gsheet_creds, store_poster_counts, SHEET_ID)
+        else:
+            print("\nℹ️ No posters were generated, skipping Google Sheet log update.")
+        
         if os.path.exists(log_file_path) and os.path.getsize(log_file_path) > 0:
             print(f"\n⚠️ NOTE: Some images failed to generate. Check '{log_file_path}' for details.")
         
@@ -1067,10 +1105,8 @@ def main():
 
     except FileNotFoundError as e:
         print(f"❌ CRITICAL ERROR: File not found: {e}.")
-        print(f"This may have happened during the initial download from Google Drive.")
     except KeyError as e:
         print(f"❌ CRITICAL ERROR: Column not found: {e}.")
-        print("Please ensure your Excel/CSV files in Google Drive have all required columns.")
     except Exception as e:
         print(f"❌ An unexpected error occurred: {e}")
 
