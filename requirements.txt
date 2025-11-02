@@ -9,3 +9,5 @@ openpyxl
 google-auth-oauthlib
 PyDrive2
 packaging
+pandas
+requests
