@@ -1,0 +1,44 @@
+# Name of the workflow, which will appear in the GitHub Actions tab
+name: Daily Poster Generation
+
+on:
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+  
+  # Triggers the workflow on a schedule
+  schedule:
+    # This is a CRON string.
+    # '30 4 * * *' means 4:30 AM UTC.
+    # 10:00 AM IST is 04:30 AM UTC (IST = UTC +5:30)
+    - cron: '30 4 * * *'
+
+jobs:
+  run-poster-generator:
+    # Use the latest version of Ubuntu to run the job
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Check out your repository's code
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # Step 2: Set up a Python environment (e.g., Python 3.11)
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Step 3: Install all the libraries from your requirements.txt file
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Step 4: Run your Python script
+      # This step securely injects your GitHub Secrets as environment variables
+      # The Python script can then access them using os.environ.get()
+      - name: Run Poster Generator Script
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+          PARENT_DRIVE_FOLDER_ID: ${{ secrets.PARENT_DRIVE_FOLDER_ID }}
+        run: python poster_generator.py
