@@ -47,7 +47,7 @@ def authenticate():
         return None
 
 # --- Configuration ---
-SOURCE_FOLDER_ID = '1qb1nOXjbR9QtwB8iHZwUttgwLgmIAT-E'
+SOURCE_FOLDER_ID = '1sern1xXqdDrQQBLXxbANj7LPs3IE1Dzo'
 TARGET_FOLDER_ID = '1HTkBss1orVVn1akNygxiuklaAHQnJy8w'
 FILE_PREFIXES = ['ArticleSalesReport', 'Overall_Instock']
 # ---------------------
