@@ -161,7 +161,7 @@ def clear_drive_folder(service, folder_id):
                 break
                 
             for file in files:
-                print(f"    -> Deleting: {file.get('name')} (ID: {file.get('id')})")
+                print(f"   -> Deleting: {file.get('name')} (ID: {file.get('id')})")
                 service.files().delete(fileId=file.get('id')).execute()
                 
             page_token = response.get('nextPageToken', None)
@@ -181,7 +181,7 @@ def find_or_create_folder(service, folder_name, parent_folder_id):
         if files:
             return files[0].get('id')
         else:
-            print(f"    -> Creating GDrive folder: '{folder_name}'")
+            print(f"   -> Creating GDrive folder: '{folder_name}'")
             file_metadata = {
                 'name': folder_name,
                 'mimeType': 'application/vnd.google-apps.folder',
@@ -219,7 +219,7 @@ def get_file_id_from_folder(service, folder_id, file_name):
         if files:
             return files[0].get('id')
         else:
-            print(f"    -> File not found in Drive: '{file_name}'")
+            print(f"   -> File not found in Drive: '{file_name}'")
             return None
     except Exception as e:
         print(f"❌ Error finding file '{file_name}' in Drive: {e}")
@@ -234,7 +234,7 @@ def download_file_from_drive(service, file_id, local_path):
         done = False
         while done is False:
             status, done = downloader.next_chunk()
-            print(f"    -> Downloading {local_path}: {int(status.progress() * 100)}%.")
+            print(f"   -> Downloading {local_path}: {int(status.progress() * 100)}%.")
         print(f"✅ Download complete: {local_path}")
     except Exception as e:
         print(f"❌ Error downloading file (ID: {file_id}) to '{local_path}': {e}")
@@ -243,7 +243,7 @@ def download_file_from_drive(service, file_id, local_path):
 def update_file_in_drive(service, local_file_path, file_id, mime_type):
     """Updates an existing file in Google Drive with a new local version."""
     try:
-        print(f"    -> Updating file in Drive: {os.path.basename(local_file_path)}")
+        print(f"   -> Updating file in Drive: {os.path.basename(local_file_path)}")
         media = MediaFileUpload(local_file_path, mimetype=mime_type)
         service.files().update(
             fileId=file_id,
@@ -388,9 +388,9 @@ def create_poster_default(image_path, product_name, price, selling_price, discou
         
         border_thickness = 20
         draw.ellipse((img_x - border_thickness, img_y - border_thickness, 
-                        img_x + final_product_image.width + border_thickness, 
-                        img_y + final_product_image.height + border_thickness), 
-                        fill=BACKGROUND_COLOR)
+                       img_x + final_product_image.width + border_thickness, 
+                       img_y + final_product_image.height + border_thickness), 
+                       fill=BACKGROUND_COLOR)
         
         poster.paste(final_product_image_with_shadow, (img_x, img_y), final_product_image_with_shadow)
         image_area_right_boundary = img_x + final_product_image_with_shadow.width
@@ -525,12 +525,12 @@ def create_poster_special_stores(image_path, product_name, price, selling_price,
     
     # --- Color Palette ---
     BACKGROUND_COLOR = "#FFF8E1" 
-    SWOOSH_COLOR = "#E0F7FA"      
-    PRICE_BOX_COLOR = "#fa9b0c"   
-    NAME_BOX_COLOR = "#E0F7FA"    
-    TEXT_COLOR = "#000000"        
-    BORDER_COLOR = "#1C4E80"      
-    WHITE_COLOR = "#FFFFFF"       
+    SWOOSH_COLOR = "#E0F7FA"     
+    PRICE_BOX_COLOR = "#fa9b0c"  
+    NAME_BOX_COLOR = "#E0F7FA"   
+    TEXT_COLOR = "#000000"       
+    BORDER_COLOR = "#1C4E80"     
+    WHITE_COLOR = "#FFFFFF"      
     FOOTER_BG_COLOR = "#FFFFFF"
     DESIGN_ACCENT_COLOR = (224, 247, 250, 150)
     BORDER_WIDTH = 30
@@ -629,9 +629,9 @@ def create_poster_special_stores(image_path, product_name, price, selling_price,
         
         border_thickness = 20
         draw.ellipse((img_x - border_thickness, img_y - border_thickness, 
-                        img_x + final_product_image.width + border_thickness, 
-                        img_y + final_product_image.height + border_thickness), 
-                        fill=BACKGROUND_COLOR)
+                       img_x + final_product_image.width + border_thickness, 
+                       img_y + final_product_image.height + border_thickness), 
+                       fill=BACKGROUND_COLOR)
         
         poster.paste(final_product_image_with_shadow, (img_x, img_y), final_product_image_with_shadow)
         image_area_right_boundary = img_x + final_product_image_with_shadow.width
@@ -757,7 +757,249 @@ def create_poster_special_stores(image_path, product_name, price, selling_price,
 
 
 # ==============================================================================
-# 7. MAIN SCRIPT EXECUTION
+# 7. <--- NEW: POSTER HELPER FUNCTIONS (FOR PATCHES) ---
+# ==============================================================================
+
+def get_discount_badge_image(discount_percent, theme_config):
+    """Creates and returns a standalone Image of the discount badge."""
+    
+    badge_radius = 250
+    shadow_offset_val = (10, 10)
+    
+    # Calculate canvas size needed
+    canvas_size = (badge_radius * 2 + shadow_offset_val[0] * 2, badge_radius * 2 + shadow_offset_val[1] * 2)
+    badge_img = Image.new('RGBA', canvas_size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(badge_img)
+    
+    # Center the badge in the canvas
+    badge_center = (badge_radius + shadow_offset_val[0] // 2, badge_radius + shadow_offset_val[1] // 2)
+    
+    # Get theme data
+    font_b1g1 = theme_config['font_b1g1_badge']
+    font_discount = theme_config['font_discount']
+    badge_color = theme_config['badge_color']
+    text_color = theme_config['badge_text_color']
+
+    is_b1g1_offer = isinstance(discount_percent, str) and 'b1g1' in str(discount_percent).lower()
+
+    if is_b1g1_offer:
+        badge_text, badge_font = ("B1G1", font_b1g1)
+    else:
+        try:
+            if isinstance(discount_percent, (int, float)):
+                badge_text = f"{int(float(discount_percent))}%\nOFF"
+            else:
+                badge_text = str(discount_percent)
+        except (ValueError, TypeError):
+            badge_text = str(discount_percent)
+        badge_font = font_discount
+
+    # Draw starburst
+    num_points = 16
+    star_points, shadow_points = [], []
+    for i in range(num_points * 2):
+        r = badge_radius if i % 2 == 0 else badge_radius * 0.8
+        angle = i * math.pi / num_points
+        x, y = (badge_center[0] + r * math.sin(angle), badge_center[1] + r * math.cos(angle))
+        star_points.append((x, y))
+        shadow_points.append((x + shadow_offset_val[0], y + shadow_offset_val[1]))
+        
+    draw.polygon(shadow_points, fill="#00000050")
+    draw.polygon(star_points, fill=badge_color)
+    draw.text(badge_center, badge_text, fill=text_color, font=badge_font, anchor="mm", align="center")
+    
+    # Crop the image to its content
+    return badge_img.crop(badge_img.getbbox())
+
+def get_price_block_image(selling_price, theme_config):
+    """Creates and returns a standalone Image of the price block."""
+
+    # --- Configuration ---
+    BLOCK_WIDTH = 1300  # Fixed width for consistency
+    box_padding_y, box_padding_x = 60, 60
+    vertical_spacing = 50
+
+    # --- Get Theme Data ---
+    font_price = theme_config['font_price']
+    font_big_savings = theme_config['font_big_savings']
+    font_offer_label = theme_config['font_offer_label']
+    box_color = theme_config['price_box_color']
+    text_color = theme_config['price_box_text_color']
+
+    # --- Determine Text ---
+    is_b1g1_offer = isinstance(selling_price, str) and 'b1g1' in str(selling_price).lower() # Use selling_price for B1G1
+    is_numeric_price = isinstance(selling_price, (int, float))
+
+    if is_b1g1_offer:
+        offer_price_text, offer_price_font, offer_label_text = "Buy 1 Get 1", font_big_savings, "Special Offer"
+    elif not is_numeric_price:
+        offer_price_text, offer_price_font, offer_label_text = str(selling_price).upper(), font_price, "Special Offer"
+    else:
+        formatted_price = f"{selling_price:,g}"
+        offer_price_text, offer_price_font, offer_label_text = f"Rs {formatted_price}/-", font_price, "Offer Price"
+
+    # --- Calculate Height ---
+    # Use a dummy draw object to measure text
+    dummy_draw = ImageDraw.Draw(Image.new('RGB', (1,1)))
+    price_bbox_calc = dummy_draw.textbbox((0,0), offer_price_text, font=offer_price_font)
+    price_height = price_bbox_calc[3] - price_bbox_calc[1]
+    label_bbox_calc = dummy_draw.textbbox((0,0), "Big Savings !!", font=font_big_savings)
+    label_height = label_bbox_calc[3] - label_bbox_calc[1]
+    
+    total_height = price_height + label_height + vertical_spacing + 2 * box_padding_y
+
+    # --- Create Canvas ---
+    # Add padding for shadow
+    shadow_blur = 15
+    shadow_offset = (10, 10)
+    canvas_width = int(BLOCK_WIDTH + shadow_blur * 2 + shadow_offset[0])
+    canvas_height = int(total_height + shadow_blur * 2 + shadow_offset[1])
+    
+    block_img = Image.new('RGBA', (canvas_width, canvas_height), (0,0,0,0))
+    draw = ImageDraw.Draw(block_img)
+
+    # --- Draw Block ---
+    # Draw shadow and rectangle offset by blur radius
+    block_xy = (shadow_blur, shadow_blur, shadow_blur + BLOCK_WIDTH, shadow_blur + total_height)
+    draw_rounded_rectangle_with_shadow(draw, block_xy, radius=30, fill=box_color, shadow_offset=shadow_offset, blur_radius=shadow_blur)
+    
+    # --- Draw Text (relative to block_xy) ---
+    block_center_x = shadow_blur + BLOCK_WIDTH // 2
+    
+    price_y = shadow_blur + total_height - box_padding_y
+    draw.text((block_center_x, price_y), offer_price_text, fill=text_color, font=offer_price_font, anchor="ms")
+    
+    price_bbox_on_canvas = draw.textbbox((block_center_x, price_y), offer_price_text, font=offer_price_font, anchor="ms")
+    label_y = price_bbox_on_canvas[1] - vertical_spacing
+    
+    draw.text((shadow_blur + box_padding_x, label_y), "Big Savings !!", fill=text_color, font=font_big_savings, anchor="ls")
+    draw.text((shadow_blur + BLOCK_WIDTH - box_padding_x, label_y), offer_label_text, fill=text_color, font=font_offer_label, anchor="rs")
+
+    # Crop the image to its content
+    return block_img.crop(block_img.getbbox())
+
+
+def create_price_update_sheet(store_products_df, theme, font_folder, output_path):
+    """Generates a single A4 sheet with all price/discount blocks for a store."""
+    
+    # --- A4 Landscape at 300 DPI ---
+    A4_WIDTH = 3508
+    A4_HEIGHT = 2480
+    MARGIN = 100
+    COL_WIDTH = 1600 # Width for one column of blocks
+    
+    sheet = Image.new("RGB", (A4_WIDTH, A4_HEIGHT), "#FFFFFF")
+    draw = ImageDraw.Draw(sheet)
+
+    # --- Load Fonts ---
+    try:
+        oswald_bold_path = os.path.join(font_folder, "Oswald-Bold.ttf")
+        lato_black_path = os.path.join(font_folder, "Lato-Black.ttf")
+        
+        # Fonts for blocks
+        font_price_size = 270 if theme == 'default' else 240
+        font_price = ImageFont.truetype(oswald_bold_path, font_price_size)
+        font_discount = ImageFont.truetype(oswald_bold_path, 100)
+        font_offer_label = ImageFont.truetype(lato_black_path, 80)
+        font_big_savings = ImageFont.truetype(oswald_bold_path, 120)
+        font_b1g1_badge = ImageFont.truetype(oswald_bold_path, 160)
+        
+        # Font for product name label
+        font_product_label = ImageFont.truetype(lato_black_path, 60)
+        font_product_label_bold = ImageFont.truetype(oswald_bold_path, 65)
+
+    except Exception as e:
+        print(f"❌ Error loading fonts for patch sheet: {e}. Using defaults.")
+        font_price, font_discount, font_offer_label, font_big_savings, font_b1g1_badge, font_product_label, font_product_label_bold = [ImageFont.load_default()]*7
+
+    # --- Define Theme Configs ---
+    if theme == 'special':
+        theme_config = {
+            'font_price': font_price,
+            'font_discount': font_discount,
+            'font_offer_label': font_offer_label,
+            'font_big_savings': font_big_savings,
+            'font_b1g1_badge': font_b1g1_badge,
+            'badge_color': "#fa9b0c",
+            'badge_text_color': "#FFFFFF",
+            'price_box_color': "#fa9b0c",
+            'price_box_text_color': "#FFFFFF"
+        }
+    else: # Default
+        theme_config = {
+            'font_price': font_price,
+            'font_discount': font_discount,
+            'font_offer_label': font_offer_label,
+            'font_big_savings': font_big_savings,
+            'font_b1g1_badge': font_b1g1_badge,
+            'badge_color': "#FFC300",
+            'badge_text_color': "#000000",
+            'price_box_color': "#FFC300",
+            'price_box_text_color': "#000000"
+        }
+
+    # --- Layout Cursors ---
+    current_x = MARGIN
+    current_y = MARGIN
+    BLOCK_PADDING_X = 30
+    ROW_PADDING_Y = 50
+    LABEL_HEIGHT = 100 # Space for product name label
+
+    for index, row in store_products_df.iterrows():
+        try:
+            product_name = str(row['Article name'])
+            selling_price = row['selling price']
+            discount_percent = row['discount %']
+
+            # --- Generate Blocks ---
+            price_block_img = get_price_block_image(selling_price, theme_config)
+            
+            is_upto_offer = isinstance(selling_price, str) and 'upto' in str(selling_price).lower()
+            discount_badge_img = None
+            if not is_upto_offer:
+                discount_badge_img = get_discount_badge_image(discount_percent, theme_config)
+
+            # --- Calculate Row Height ---
+            badge_height = discount_badge_img.height if discount_badge_img else 0
+            row_height = LABEL_HEIGHT + max(price_block_img.height, badge_height) + ROW_PADDING_Y
+
+            # --- Check for Page Break (New Column) ---
+            if current_y + row_height > (A4_HEIGHT - MARGIN):
+                current_y = MARGIN # Reset Y
+                current_x += COL_WIDTH # Move to next column
+                
+                if current_x + COL_WIDTH > (A4_WIDTH - MARGIN):
+                    print(f"⚠️ Warning: Not all items fit on one patch sheet for this store.")
+                    break # Stop if we run out of columns
+
+            # --- Draw Product Name Label ---
+            label_y = current_y + 30
+            draw.text((current_x, label_y), "PRODUCT:", fill="#555555", font=font_product_label)
+            draw.text((current_x + 220, label_y), product_name, fill="#000000", font=font_product_label_bold)
+            draw.line([(current_x, label_y + 60), (current_x + COL_WIDTH - 50, label_y + 60)], fill="#AAAAAA", width=2)
+            
+            paste_y = current_y + LABEL_HEIGHT
+
+            # --- Paste Blocks ---
+            sheet.paste(price_block_img, (current_x, paste_y), price_block_img)
+            
+            if discount_badge_img:
+                # Align badge vertically with price block
+                badge_y = paste_y + (price_block_img.height - discount_badge_img.height) // 2
+                sheet.paste(discount_badge_img, (current_x + price_block_img.width + BLOCK_PADDING_X, badge_y), discount_badge_img)
+
+            # --- Update Cursor ---
+            current_y += row_height
+
+        except Exception as e:
+            print(f"❌ Error drawing block for '{product_name}': {e}")
+            continue
+
+    sheet.save(output_path)
+
+
+# ==============================================================================
+# 8. MAIN SCRIPT EXECUTION
 # ==============================================================================
 
 def main():
@@ -983,7 +1225,7 @@ def main():
 
 
         # ======================================================
-        # --- 2. POSTER GENERATION ---
+        # --- 9. POSTER GENERATION --- (Modified Section)
         # ======================================================
         print("\n--- Starting Poster Generation Step ---")
 
@@ -1008,90 +1250,120 @@ def main():
 
         company = "Best Price"
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        font_folder = os.path.dirname(logo_path)
         
         # <--- NEW: Initialize dictionary to store poster counts
         store_poster_counts = {}
         
-        # --- Main Generation Loop ---
-        for index, row in merged_df_for_posters.iterrows():
-            try:
-                store_location = row['Storename']
-                
-                safe_store_name = "".join([c for c in str(store_location) if c.isalnum() or c in (' ', '-')]).rstrip()
-                store_folder_path = os.path.join(output_folder_path, safe_store_name)
-                os.makedirs(store_folder_path, exist_ok=True)
-                
-                safe_product_name = "".join([c for c in str(row['Article name']) if c.isalnum() or c == ' ']).rstrip()
-                
-                if pd.isna(row['Image Link']) or str(row['Image Link']).strip() == "":
-                    print(f"\nSKIPPING poster for: '{row['Article name']}' (Article No: {row['Article No.']}) - No Image Link found.")
-                    log_message = f"{timestamp} - FAILED - Product: '{row['Article name']}', Article No: {row['Article No.']}, Error: Image Link not found in 'product_images_1.xlsx'.\n"
+        # <--- NEW: Group by store to process one store at a time ---
+        grouped_by_store = merged_df_for_posters.groupby('Storename')
+
+        for store_location, store_df in grouped_by_store:
+            print(f"\n--- Processing Store: {store_location} ---")
+            
+            safe_store_name = "".join([c for c in str(store_location) if c.isalnum() or c in (' ', '-')]).rstrip()
+            store_folder_path = os.path.join(output_folder_path, safe_store_name)
+            os.makedirs(store_folder_path, exist_ok=True)
+            
+            # Find or create the GDrive folder for this store
+            drive_store_folder_id = find_or_create_folder(drive_service, safe_store_name, PARENT_DRIVE_FOLDER_ID)
+            
+            # Determine theme for this store
+            theme = 'special' if store_location in special_store_list else 'default'
+
+            # --- Inner Loop: Generate individual posters ---
+            for index, row in store_df.iterrows():
+                try:
+                    safe_product_name = "".join([c for c in str(row['Article name']) if c.isalnum() or c == ' ']).rstrip()
+                    
+                    if pd.isna(row['Image Link']) or str(row['Image Link']).strip() == "":
+                        print(f"\nSKIPPING poster for: '{row['Article name']}' (Article No: {row['Article No.']}) - No Image Link found.")
+                        log_message = f"{timestamp} - FAILED - Product: '{row['Article name']}', Article No: {row['Article No.']}, Error: Image Link not found in 'product_images_1.xlsx'.\n"
+                        with open(log_file_path, 'a', encoding='utf-8') as log_file:
+                            log_file.write(log_message)
+                        continue
+                    
+                    print(f"\nGenerating poster for: '{row['Article name']}'")
+                    
+                    if theme == 'special':
+                        print("-> Using SPECIAL (Muted) template.")
+                        filename = f"{safe_product_name}_Muted.png"
+                        output_filepath = os.path.join(store_folder_path, filename)
+                        
+                        create_poster_special_stores(
+                            image_path=row['Image Link'], 
+                            product_name=row['Article name'], 
+                            price=row['current mrp'],
+                            selling_price=row['selling price'],
+                            discount_percent=row['discount %'],
+                            logo_path=logo_path,
+                            company_name=company,
+                            location=store_location,
+                            output_path=output_filepath,
+                            log_file_path=log_file_path
+                        )
+                    else:
+                        print("-> Using DEFAULT (Orange) template.")
+                        filename = f"{safe_product_name}_Default.png"
+                        output_filepath = os.path.join(store_folder_path, filename)
+                        
+                        create_poster_default(
+                            image_path=row['Image Link'], 
+                            product_name=row['Article name'], 
+                            price=row['current mrp'],
+                            selling_price=row['selling price'],
+                            discount_percent=row['discount %'],
+                            logo_path=logo_path,
+                            company_name=company,
+                            location=store_location,
+                            output_path=output_filepath,
+                            log_file_path=log_file_path
+                        )
+                    
+                    print(f"-> Saved locally: {output_filepath}")
+
+                    # <--- NEW: Increment the poster count for this store
+                    store_poster_counts[store_location] = store_poster_counts.get(store_location, 0) + 1
+
+                    # --- Upload to Google Drive ---
+                    print(f"-> Uploading '{filename}' to Google Drive...")
+                    if drive_store_folder_id:
+                        upload_file_to_drive(drive_service, output_filepath, drive_store_folder_id, filename)
+                        print("-> Upload complete.")
+                    else:
+                        print(f"-> ❌ SKIPPING UPLOAD: Could not create/find GDrive folder for '{safe_store_name}'.")
+
+                except Exception as e:
+                    print(f"❌ An unexpected error occurred for row {index} ({row.get('Article name')}): {e}")
+                    log_message = f"{timestamp} - FAILED - Product: '{row.get('Article name')}', Article No: {row.get('Article No.')}, Error: {e}\n"
                     with open(log_file_path, 'a', encoding='utf-8') as log_file:
                         log_file.write(log_message)
                     continue
-                
-                print(f"\nGenerating poster for: '{row['Article name']}' for store '{store_location}'")
-                
-                if store_location in special_store_list:
-                    print("-> Using SPECIAL (Muted) template.")
-                    filename = f"{safe_product_name}_Muted.png"
-                    output_filepath = os.path.join(store_folder_path, filename)
-                    
-                    create_poster_special_stores(
-                        image_path=row['Image Link'], 
-                        product_name=row['Article name'], 
-                        price=row['current mrp'],
-                        selling_price=row['selling price'],
-                        discount_percent=row['discount %'],
-                        logo_path=logo_path,
-                        company_name=company,
-                        location=store_location,
-                        output_path=output_filepath,
-                        log_file_path=log_file_path
-                    )
-                else:
-                    print("-> Using DEFAULT (Orange) template.")
-                    filename = f"{safe_product_name}_Default.png"
-                    output_filepath = os.path.join(store_folder_path, filename)
-                    
-                    create_poster_default(
-                        image_path=row['Image Link'], 
-                        product_name=row['Article name'], 
-                        price=row['current mrp'],
-                        selling_price=row['selling price'],
-                        discount_percent=row['discount %'],
-                        logo_path=logo_path,
-                        company_name=company,
-                        location=store_location,
-                        output_path=output_filepath,
-                        log_file_path=log_file_path
-                    )
-                
-                print(f"-> Saved locally: {output_filepath}")
+            
+            # --- <--- NEW: Generate Patch Sheet for the store --- ---
+            print(f"\n-> Generating price update 'patch sheet' for '{store_location}'...")
+            sheet_output_name = f"_{safe_store_name}_Price_Updates_Sheet.png"
+            sheet_output_path = os.path.join(store_folder_path, sheet_output_name)
+            
+            try:
+                create_price_update_sheet(store_df, theme, font_folder, sheet_output_path)
+                print(f"-> Saved patch sheet locally: {sheet_output_path}")
 
-                # <--- NEW: Increment the poster count for this store
-                store_poster_counts[store_location] = store_poster_counts.get(store_location, 0) + 1
-
-                # --- Upload to Google Drive ---
-                print(f"-> Uploading '{filename}' to Google Drive...")
-                drive_store_folder_id = find_or_create_folder(drive_service, safe_store_name, PARENT_DRIVE_FOLDER_ID)
-                
+                # Upload the patch sheet
                 if drive_store_folder_id:
-                    upload_file_to_drive(drive_service, output_filepath, drive_store_folder_id, filename)
-                    print("-> Upload complete.")
+                    upload_file_to_drive(drive_service, sheet_output_path, drive_store_folder_id, sheet_output_name)
+                    print(f"-> Uploaded patch sheet '{sheet_output_name}'.")
                 else:
-                    print(f"-> ❌ SKIPPING UPLOAD: Could not create/find GDrive folder for '{safe_store_name}'.")
-
+                    print(f"-> ❌ SKIPPING PATCH SHEET UPLOAD: GDrive folder not found.")
+            
             except Exception as e:
-                print(f"❌ An unexpected error occurred for row {index} ({row.get('Article name')}): {e}")
-                log_message = f"{timestamp} - FAILED - Product: '{row.get('Article name')}', Article No: {row.get('Article No.')}, Error: {e}\n"
-                with open(log_file_path, 'a', encoding='utf-8') as log_file:
-                    log_file.write(log_message)
-                continue
-                
-        print("\n✅ All posters have been processed.")
+                print(f"-> ❌ FAILED to generate or upload price update sheet: {e}")
+
+            print(f"--- Finished Processing Store: {store_location} ---")
+            
+        print("\n✅ All posters and patch sheets have been processed.")
         
-        # <--- NEW: Update Google Sheet Log after the loop
+        # <--- NEW: Update Google Sheet Log after all loops
         if store_poster_counts:
             SHEET_ID = '1pE6hMcP04nmvcGrM6AKBvznC-d0B8_oZnW6kfT5hJDA'
             update_poster_counts_sheet(gsheet_creds, store_poster_counts, SHEET_ID)
@@ -1111,7 +1383,7 @@ def main():
         print(f"❌ An unexpected error occurred: {e}")
 
 # ==============================================================================
-# 8. SCRIPT ENTRY POINT
+# 9. SCRIPT ENTRY POINT (Renumbered)
 # ==============================================================================
 if __name__ == "__main__":
     main()
