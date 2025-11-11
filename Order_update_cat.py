@@ -1,4 +1,4 @@
-# Order_update_cat.py - Generates Daily Pivot Report for Last 6 Days with Grouping
+# Order_update_cat.py - Generates Daily Pivot Report for Last 5 Days (Matured)
 
 import os
 import json
@@ -87,10 +87,13 @@ def export_df_to_gsheet(spreadsheet, df_to_export, sheet_name):
         try:
             worksheet = spreadsheet.worksheet(sheet_name)
         except gspread.WorksheetNotFound:
+            print(f"Worksheet '{sheet_name}' not found. Creating it...")
             worksheet = spreadsheet.add_worksheet(title=sheet_name, rows="1000", cols="50")
         
         # Clear a reasonable range. Adjust 'Z' if your pivot is wider.
+        print(f"Clearing worksheet '{sheet_name}'...")
         worksheet.batch_clear(['A:Z']) 
+        print(f"Updating worksheet '{sheet_name}' with new data...")
         worksheet.update(export_data, 'A1', value_input_option='USER_ENTERED')
         print(f"✅ Successfully exported to worksheet: '{sheet_name}'")
     except Exception as e:
@@ -162,22 +165,24 @@ def main():
     # 4. Ensure 'Item Gross Weight' is numeric for sum()
     df['Item Gross Weight'] = pd.to_numeric(df['Item Gross Weight'], errors='coerce')
     
-    # 5. Define date range for the last 6 days (today + 5 previous days)
+    # 5. *** NEW DATE LOGIC ***
+    # Define date range for the 5-day window ending yesterday
     today = pd.to_datetime('today').normalize()
-    start_date = today - pd.Timedelta(days=5)
+    yesterday = today - pd.Timedelta(days=1)
+    start_date = yesterday - pd.Timedelta(days=4)
     
-    print(f"Filtering data for the last 6 days (from {start_date.strftime('%Y-%m-%d')} to {today.strftime('%Y-%m-%d')})...")
+    print(f"Filtering for 5-day matured window: {start_date.strftime('%Y-%m-%d')} to {yesterday.strftime('%Y-%m-%d')}")
     
-    # 6. Filter the DataFrame for the last 6 days
-    df_filtered = df[(df['int_order_date_dt'] >= start_date) & (df['int_order_date_dt'] <= today)].copy()
+    # 6. Filter the DataFrame for this 5-day window
+    df_filtered = df[(df['int_order_date_dt'] >= start_date) & (df['int_order_date_dt'] <= yesterday)].copy()
     
     # 7. Create the string date column *after* filtering
     df_filtered['int_order_date'] = df_filtered['int_order_date_dt'].dt.strftime('%m/%d/%Y')
     
     # 8. Create the pivot table
     if df_filtered.empty:
-        print("❌ No data found for the last 6 days. The report will be empty.")
-        pivot_report_df = pd.DataFrame(columns=['int_order_date', 'Store Code1', 'Mode of Fullfillment'])
+        print("❌ No data found for the 5-day window. Report will be empty (this may clear your sheet).")
+        pivot_report_df = pd.DataFrame() # No new data
     else:
         print("Creating pivot table...")
         pivot_report_df = df_filtered.pivot_table(
@@ -203,20 +208,4 @@ def main():
     pivot_report_df.reset_index().to_csv(pivot_output_path, index=False)
     
     # Upload to Google Drive
-    upload_file_to_drive(drive_service, pivot_output_path, INPUT_OUTPUT_FOLDER_ID)
-    print("-" * 30)
-
-    # --- 5. Exporting Report to Google Sheets ---
-    print("--- Exporting report to Google Sheets ---")
-    try:
-        spreadsheet = sheets_service.open_by_url(GSHEET_URL)
-        # The helper function will reset the index for proper GSheet export
-        export_df_to_gsheet(spreadsheet, pivot_report_df, 'Sheet1') 
-    except Exception as e:
-        print(f"\n❌ An error occurred during the Google Sheets export process: {e}")
-    print("-" * 30)
-
-    print("--- Script Finished ---")
-
-if __name__ == "__main__":
-    main()
+    upload_file_to
