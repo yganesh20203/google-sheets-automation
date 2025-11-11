@@ -81,23 +81,17 @@ def export_df_to_gsheet(spreadsheet, df_to_export, sheet_name):
         if not isinstance(df_to_export.index, pd.RangeIndex):
             df_to_export = df_to_export.reset_index()
 
-        # Handle multi-level columns from pivot
-        if isinstance(df_to_export.columns, pd.MultiIndex):
-            # Flatten MultiIndex by joining levels with a space
-            df_to_export.columns = [' '.join(col).strip() for col in df_to_export.columns.values]
-
         export_data = [df_to_export.columns.values.tolist()] + df_to_export.values.tolist()
 
         try:
             worksheet = spreadsheet.worksheet(sheet_name)
         except gspread.WorksheetNotFound:
             print(f"Worksheet '{sheet_name}' not found. Creating it...")
-            # Adjust column count to be safe for wide pivots
-            worksheet = spreadsheet.add_worksheet(title=sheet_name, rows="1000", cols="100")
+            worksheet = spreadsheet.add_worksheet(title=sheet_name, rows="1000", cols="50")
         
-        # Clear a wider range for the new pivot
+        # Clear a reasonable range. Adjust 'Z' if your pivot is wider.
         print(f"Clearing worksheet '{sheet_name}'...")
-        worksheet.batch_clear(['A:ZZ']) 
+        worksheet.batch_clear(['A:Z']) 
         print(f"Updating worksheet '{sheet_name}' with new data...")
         worksheet.update(export_data, 'A1', value_input_option='USER_ENTERED')
         print(f"✅ Successfully exported to worksheet: '{sheet_name}'")
@@ -105,8 +99,9 @@ def export_df_to_gsheet(spreadsheet, df_to_export, sheet_name):
         print(f"\n❌ An error occurred during the export to '{sheet_name}': {e}")
 
 
-# --- MODULAR FUNCTION ---
+# --- NEW MODULAR FUNCTION ---
 
+# *** Function definition updated to accept drive_service ***
 def process_and_upload_pivot_report(df_original, cat_df, sheets_service, drive_service, date_column_name, target_sheet_name, local_data_path):
     """
     Generates a pivot report based on a dynamic date column and uploads it to a specific sheet.
@@ -133,6 +128,7 @@ def process_and_upload_pivot_report(df_original, cat_df, sheets_service, drive_s
     df.drop(columns=['Grouping'], inplace=True) # Drop the original column
 
     # 3. Convert the specified date column to a datetime object
+    # This logic handles "10/28/2025 17:36" or "11/5/2025 10:30"
     print(f"Parsing date column: {date_column_name}")
     df['int_date_dt'] = pd.to_datetime(df[date_column_name].astype(str).str.split(' ').str[0], errors='coerce')
 
@@ -158,15 +154,11 @@ def process_and_upload_pivot_report(df_original, cat_df, sheets_service, drive_s
         pivot_report_df = pd.DataFrame() # No new data
     else:
         print("Creating pivot table...")
-        # *** PIVOT TABLE LOGIC UPDATED ***
         pivot_report_df = df_filtered.pivot_table(
             index=['report_date', 'Store Code1', 'Mode of Fullfillment'], # Rows
             columns=['grouping'],                                         # Columns
-            values=['Item Gross Weight', 'Hybris Order Number'],          # Values
-            aggfunc={
-                'Item Gross Weight': 'sum',
-                'Hybris Order Number': 'nunique'
-            },
+            values='Item Gross Weight',                                   # Values
+            aggfunc='sum',                                                # Aggregation
             fill_value=0                                                  # Fill missing with 0
         )
     
@@ -181,7 +173,7 @@ def process_and_upload_pivot_report(df_original, cat_df, sheets_service, drive_s
     # Save file locally (reset_index so all index levels are columns)
     pivot_report_df.reset_index().to_csv(pivot_output_path, index=False)
     
-    # Upload to Google Drive
+    # *** Call updated to use the drive_service variable ***
     upload_file_to_drive(drive_service, pivot_output_path, INPUT_OUTPUT_FOLDER_ID)
 
     # --- 5. Exporting Report to Google Sheets (with maturation logic) ---
@@ -212,29 +204,14 @@ def process_and_upload_pivot_report(df_original, cat_df, sheets_service, drive_s
         else:
             print("Combining old and new data...")
             try:
-                # Handle flattened or unflattened columns from GSheet
-                # Check for the 'report_date' column (which is in all new reports)
-                if 'report_date' not in existing_df.columns:
-                    # Try to find the unflattened index name
-                    if 'index' in existing_df.columns and 'report_date' in existing_df['index'].iloc[0]:
-                         # This is a more complex read, for now, we'll just use the simple column name
-                         pass
-                    # A common name from an old pivot might be 'int_order_date' or 'report_date'
-                    date_col_in_sheet = 'report_date'
-                    if date_col_in_sheet not in existing_df.columns:
-                         # Fallback to the first column if 'report_date' isn't there
-                         date_col_in_sheet = existing_df.columns[0]
-                         print(f"Warning: 'report_date' not found. Using first column '{date_col_in_sheet}' for date comparison.")
-                else:
-                    date_col_in_sheet = 'report_date'
-
-                existing_df['int_date_dt'] = pd.to_datetime(existing_df[date_col_in_sheet], format='%m/%d/%Y', errors='coerce')
+                # IMPORTANT: Use the generic 'report_date' column for comparison
+                existing_df['int_date_dt'] = pd.to_datetime(existing_df['report_date'], format='%m/%d/%Y', errors='coerce')
                 
                 # `start_date` is the first day of the new report
                 # We want to keep all data *before* this date
                 old_data_to_keep = existing_df[existing_df['int_date_dt'] < start_date].copy()
                 
-                # Combine the old data with the new data
+                # Concatenate the old, untouched data with the new, refreshed data
                 final_df_to_export = pd.concat([old_data_to_keep, new_data_df], ignore_index=True)
                 
                 # Drop the temporary datetime column if it exists
@@ -271,6 +248,9 @@ def main():
     drive_service = build('drive', 'v3', credentials=creds)
     sheets_service = gspread.authorize(creds)
     
+    # *** This failing line has been removed ***
+    # sheets_service.auth.service = drive_service
+    
     print("✅ Authentication successful.")
     print("-" * 30)
 
@@ -305,6 +285,7 @@ def main():
     # --- 4. Process and Upload Reports ---
     
     # Call 1: Process the Order Date report for Sheet1
+    # *** Call updated to pass drive_service ***
     process_and_upload_pivot_report(
         df_original=df_main, 
         cat_df=cat_df_main, 
@@ -316,6 +297,7 @@ def main():
     )
     
     # Call 2: Process the LR Date report for Sheet2
+    # *** Call updated to pass drive_service ***
     process_and_upload_pivot_report(
         df_original=df_main, 
         cat_df=cat_df_main, 
