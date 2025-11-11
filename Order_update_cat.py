@@ -233,84 +233,6 @@ def process_and_upload_pivot_report(df_original, cat_df, sheets_service, drive_s
     print(f"--- Finished processing for {target_sheet_name} ---")
 
 
-# --- MAIN EXECUTION ---
-
-def main():
-    """Main function to run the entire automation process."""
-    print("--- 1. Authenticating ---")
-    creds_json_str = os.getenv("GCP_SA_KEY")
-    if not creds_json_str:
-        raise ValueError("GCP_SA_KEY secret not found in environment.")
-
-    creds_info = json.loads(creds_json_str)
-    creds = Credentials.from_service_account_info(creds_info, scopes=SCOPES)
-
-    drive_service = build('drive', 'v3', credentials=creds)
-    sheets_service = gspread.authorize(creds)
-    
-    # *** This failing line has been removed ***
-    # sheets_service.auth.service = drive_service
-    
-    print("✅ Authentication successful.")
-    print("-" * 30)
-
-    print("--- 2. Finding & Downloading Input Files ---")
-    local_data_path = 'data'
-    os.makedirs(local_data_path, exist_ok=True)
-
-    # Define all input filenames
-    input_filenames = {
-        'capacity': 'Capacity_dump.csv',
-        'grouping': 'cat_grouping.csv'
-    }
-    local_file_paths = {}
-
-    # Download all files
-    for key, filename in input_filenames.items():
-        file_id = get_file_id_by_name(drive_service, filename, INPUT_OUTPUT_FOLDER_ID)
-        if not file_id:
-            raise FileNotFoundError(f"'{filename}' could not be found in the specified Drive folder.")
-        
-        local_file_paths[key] = os.path.join(local_data_path, filename)
-        download_file_from_drive(drive_service, file_id, local_file_paths[key])
-    
-    print("-" * 30)
-
-    print("--- 3. Loading Main DataFrames ---")
-    df_main = pd.read_csv(local_file_paths['capacity'], low_memory=False)
-    cat_df_main = pd.read_csv(local_file_paths['grouping'])
-    print("✅ All input files loaded into DataFrames.")
-    print("-" * 30)
-    
-    # --- 4. Process and Upload Reports ---
-    
-    # Call 1: Process the Order Date report for Sheet1
-    # *** Call updated to pass drive_service ***
-    process_and_upload_pivot_report(
-        df_original=df_main, 
-        cat_df=cat_df_main, 
-        sheets_service=sheets_service, 
-        drive_service=drive_service,
-        date_column_name="Order Date IST", 
-        target_sheet_name="Sheet1",
-        local_data_path=local_data_path
-    )
-    
-    # Call 2: Process the LR Date report for Sheet2
-    # *** Call updated to pass drive_service ***
-    process_and_upload_pivot_report(
-        df_original=df_main, 
-        cat_df=cat_df_main, 
-        sheets_service=sheets_service, 
-        drive_service=drive_service,
-        date_column_name="LR Date Time", 
-        target_sheet_name="Sheet2",
-        local_data_path=local_data_path
-    )
-    
-    print("=" * 40)
-    print("--- All Reports Finished ---")
-
 def process_and_upload_sheet3_reports(df_original, sheets_service, drive_service, local_data_path):
     """
     Generates distinct order count reports for Order Date and LR Date
@@ -418,13 +340,94 @@ def process_and_upload_sheet3_reports(df_original, sheets_service, drive_service
 
     print(f"--- Finished processing for {target_sheet_name} ---")
 
-if __name__ == "__main__":
-    main()
 
-# Call 3: Process the Distinct Counts report for Sheet3
+# --- MAIN EXECUTION ---
+
+def main():
+    """Main function to run the entire automation process."""
+    print("--- 1. Authenticating ---")
+    creds_json_str = os.getenv("GCP_SA_KEY")
+    if not creds_json_str:
+        raise ValueError("GCP_SA_KEY secret not found in environment.")
+
+    creds_info = json.loads(creds_json_str)
+    creds = Credentials.from_service_account_info(creds_info, scopes=SCOPES)
+
+    drive_service = build('drive', 'v3', credentials=creds)
+    sheets_service = gspread.authorize(creds)
+    
+    # *** This failing line has been removed ***
+    # sheets_service.auth.service = drive_service
+    
+    print("✅ Authentication successful.")
+    print("-" * 30)
+
+    print("--- 2. Finding & Downloading Input Files ---")
+    local_data_path = 'data'
+    os.makedirs(local_data_path, exist_ok=True)
+
+    # Define all input filenames
+    input_filenames = {
+        'capacity': 'Capacity_dump.csv',
+        'grouping': 'cat_grouping.csv'
+    }
+    local_file_paths = {}
+
+    # Download all files
+    for key, filename in input_filenames.items():
+        file_id = get_file_id_by_name(drive_service, filename, INPUT_OUTPUT_FOLDER_ID)
+        if not file_id:
+            raise FileNotFoundError(f"'{filename}' could not be found in the specified Drive folder.")
+        
+        local_file_paths[key] = os.path.join(local_data_path, filename)
+        download_file_from_drive(drive_service, file_id, local_file_paths[key])
+    
+    print("-" * 30)
+
+    print("--- 3. Loading Main DataFrames ---")
+    df_main = pd.read_csv(local_file_paths['capacity'], low_memory=False)
+    cat_df_main = pd.read_csv(local_file_paths['grouping'])
+    print("✅ All input files loaded into DataFrames.")
+    print("-" * 30)
+    
+    # --- 4. Process and Upload Reports ---
+    
+    # Call 1: Process the Order Date report for Sheet1
+    process_and_upload_pivot_report(
+        df_original=df_main, 
+        cat_df=cat_df_main, 
+        sheets_service=sheets_service, 
+        drive_service=drive_service,
+        date_column_name="Order Date IST", 
+        target_sheet_name="Sheet1",
+        local_data_path=local_data_path
+    )
+    
+    # Call 2: Process the LR Date report for Sheet2
+    process_and_upload_pivot_report(
+        df_original=df_main, 
+        cat_df=cat_df_main, 
+        sheets_service=sheets_service, 
+        drive_service=drive_service,
+        date_column_name="LR Date Time", 
+        target_sheet_name="Sheet2",
+        local_data_path=local_data_path
+    )
+    
+    # *** THIS IS THE CORRECT LOCATION FOR THE NEW CALL ***
+    # Call 3: Process the Distinct Counts report for Sheet3
     process_and_upload_sheet3_reports(
         df_original=df_main,
         sheets_service=sheets_service,
         drive_service=drive_service,
         local_data_path=local_data_path
     )
+    
+    print("=" * 40)
+    print("--- All Reports Finished ---")
+
+
+if __name__ == "__main__":
+    main()
+
+# *** THE CODE BLOCK THAT WAS HERE IS NOW MOVED UP INSIDE main() ***
