@@ -1,4 +1,4 @@
-# Order_update_cat.py - Generates Daily Pivot Report
+# Order_update_cat.py - Generates Daily Pivot Report for Last 6 Days
 
 import os
 import json
@@ -135,30 +135,47 @@ def main():
     
     print("Processing new pivot report...")
     
-    # 1. Add new column 'int_order_date' from 'Order Date IST'
-    # This splits '10/28/2025 17:36' into '10/28/2025'
-    df['int_order_date'] = pd.to_datetime(df['Order Date IST'].astype(str).str.split(' ').str[0], errors='coerce').dt.strftime('%m/%d/%Y')
+    # 1. Convert 'Order Date IST' to a datetime object
+    # This splits '10/28/2025 17:36' and converts '10/28/2025'
+    df['int_order_date_dt'] = pd.to_datetime(df['Order Date IST'].astype(str).str.split(' ').str[0], errors='coerce')
 
     # 2. Ensure 'Item Gross Weight' is numeric for sum()
     df['Item Gross Weight'] = pd.to_numeric(df['Item Gross Weight'], errors='coerce')
     
-    # 3. Create the pivot table
-    print("Creating pivot table...")
-    pivot_report_df = df.pivot_table(
-        index=['int_order_date', 'Store Code1'], # Rows in tabular form
-        values=['Hybris Order Number', 'Item Gross Weight'],
-        aggfunc={
-            'Hybris Order Number': 'nunique', # Distinct count of Hybris Order Number
-            'Item Gross Weight': 'sum'        # Sum of Item Gross Weight
-        },
-        fill_value=0 # Fill missing values with 0
-    )
+    # 3. Define date range for the last 6 days (today + 5 previous days)
+    today = pd.to_datetime('today').normalize()
+    start_date = today - pd.Timedelta(days=5)
     
-    # Rename columns for clarity in the final report
-    pivot_report_df.rename(columns={
-        'Hybris Order Number': 'Distinct_Order_Count',
-        'Item Gross Weight': 'Total_Item_Gross_Weight'
-    }, inplace=True)
+    print(f"Filtering data for the last 6 days (from {start_date.strftime('%Y-%m-%d')} to {today.strftime('%Y-%m-%d')})...")
+    
+    # 4. Filter the DataFrame for the last 6 days
+    df_filtered = df[(df['int_order_date_dt'] >= start_date) & (df['int_order_date_dt'] <= today)].copy()
+    
+    # 5. Create the string date column *after* filtering
+    df_filtered['int_order_date'] = df_filtered['int_order_date_dt'].dt.strftime('%m/%d/%Y')
+    
+    # 6. Create the pivot table
+    if df_filtered.empty:
+        print("❌ No data found for the last 6 days. The report will be empty.")
+        # Create an empty df with the expected columns for the GSheet
+        pivot_report_df = pd.DataFrame(columns=['int_order_date', 'Store Code1', 'Mode of Fullfillment', 'Distinct_Order_Count', 'Total_Item_Gross_Weight'])
+    else:
+        print("Creating pivot table...")
+        pivot_report_df = df_filtered.pivot_table(
+            index=['int_order_date', 'Store Code1', 'Mode of Fullfillment'], # Rows in tabular form
+            values=['Hybris Order Number', 'Item Gross Weight'],
+            aggfunc={
+                'Hybris Order Number': 'nunique', # Distinct count of Hybris Order Number
+                'Item Gross Weight': 'sum'        # Sum of Item Gross Weight
+            },
+            fill_value=0 # Fill missing values with 0
+        )
+        
+        # Rename columns for clarity in the final report
+        pivot_report_df.rename(columns={
+            'Hybris Order Number': 'Distinct_Order_Count',
+            'Item Gross Weight': 'Total_Item_Gross_Weight'
+        }, inplace=True)
 
     print("✅ Pivot table created successfully.")
     print("-" * 30)
@@ -171,7 +188,7 @@ def main():
     # Define local output file path
     pivot_output_path = os.path.join(local_data_path, 'daily_order_weight_pivot_report.csv')
 
-    # Save file locally (reset_index so 'int_order_date' and 'Store Code1' are columns)
+    # Save file locally (reset_index so all index levels are columns)
     pivot_report_df.reset_index().to_csv(pivot_output_path, index=False)
     
     # Upload to Google Drive
