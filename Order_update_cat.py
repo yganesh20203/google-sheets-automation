@@ -255,7 +255,8 @@ def process_and_upload_sheet3_reports(df_original, sheets_service, drive_service
     
     if not df_ord_filtered.empty:
         df_ord_filtered['report_date'] = df_ord_filtered['int_date_dt'].dt.strftime('%m/%d/%Y')
-        order_counts_df = df_ord_filtered.groupby(['report_date', 'Store Code1'])['Hybris Order Number'].nunique().reset_index()
+        # *** UPDATED GROUPBY HERE ***
+        order_counts_df = df_ord_filtered.groupby(['report_date', 'Store Code1', 'Mode of Fullfillment'])['Hybris Order Number'].nunique().reset_index()
         order_counts_df.rename(columns={'Hybris Order Number': 'Distinct_Order_Count'}, inplace=True)
         order_counts_df['report_type'] = 'Order Date' # Add type identifier
         print("✅ Created Order Date distinct counts.")
@@ -270,7 +271,8 @@ def process_and_upload_sheet3_reports(df_original, sheets_service, drive_service
 
     if not df_lr_filtered.empty:
         df_lr_filtered['report_date'] = df_lr_filtered['int_date_dt'].dt.strftime('%m/%d/%Y')
-        lr_counts_df = df_lr_filtered.groupby(['report_date', 'Store Code1'])['Hybris Order Number'].nunique().reset_index()
+        # *** UPDATED GROUPBY HERE ***
+        lr_counts_df = df_lr_filtered.groupby(['report_date', 'Store Code1', 'Mode of Fullfillment'])['Hybris Order Number'].nunique().reset_index()
         lr_counts_df.rename(columns={'Hybris Order Number': 'Distinct_Order_Count'}, inplace=True)
         lr_counts_df['report_type'] = 'LR Date' # Add type identifier
         print("✅ Created LR Date distinct counts.")
@@ -339,7 +341,6 @@ def process_and_upload_sheet3_reports(df_original, sheets_service, drive_service
         print(f"\n❌ An error occurred during the Google Sheets export process for {target_sheet_name}: {e}")
 
     print(f"--- Finished processing for {target_sheet_name} ---")
-
 
 # --- MAIN EXECUTION ---
 
