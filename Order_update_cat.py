@@ -161,7 +161,7 @@ def main():
     }, inplace=True)
 
     print("✅ Pivot table created successfully.")
-    print("-" * tran30)
+    print("-" * 30)
     
     # --- END OF NEW DATA PROCESSING ---
 
