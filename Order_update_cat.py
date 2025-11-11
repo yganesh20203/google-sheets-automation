@@ -311,5 +311,120 @@ def main():
     print("=" * 40)
     print("--- All Reports Finished ---")
 
+def process_and_upload_sheet3_reports(df_original, sheets_service, drive_service, local_data_path):
+    """
+    Generates distinct order count reports for Order Date and LR Date
+    and uploads them to 'Sheet3' with maturation logic.
+    """
+    print("=" * 40)
+    print("Processing Report for: Sheet3 (Distinct Order Counts)")
+    print("=" * 40)
+
+    # --- Define Date Range ---
+    today = pd.to_datetime('today').normalize()
+    yesterday = today - pd.Timedelta(days=1)
+    start_date = yesterday - pd.Timedelta(days=4)
+    print(f"Filtering for 5-day matured window: {start_date.strftime('%Y-%m-%d')} to {yesterday.strftime('%Y-%m-%d')}")
+
+    # --- 1. Process Order Date Report ---
+    df_ord = df_original.copy()
+    df_ord['int_date_dt'] = pd.to_datetime(df_ord['Order Date IST'].astype(str).str.split(' ').str[0], errors='coerce')
+    df_ord_filtered = df_ord[(df_ord['int_date_dt'] >= start_date) & (df_ord['int_date_dt'] <= yesterday)].copy()
+    
+    if not df_ord_filtered.empty:
+        df_ord_filtered['report_date'] = df_ord_filtered['int_date_dt'].dt.strftime('%m/%d/%Y')
+        order_counts_df = df_ord_filtered.groupby(['report_date', 'Store Code1'])['Hybris Order Number'].nunique().reset_index()
+        order_counts_df.rename(columns={'Hybris Order Number': 'Distinct_Order_Count'}, inplace=True)
+        order_counts_df['report_type'] = 'Order Date' # Add type identifier
+        print("✅ Created Order Date distinct counts.")
+    else:
+        print("ℹ️ No Order Date data found for the 5-day window.")
+        order_counts_df = pd.DataFrame()
+
+    # --- 2. Process LR Date Report ---
+    df_lr = df_original.copy()
+    df_lr['int_date_dt'] = pd.to_datetime(df_lr['LR Date Time'].astype(str).str.split(' ').str[0], errors='coerce')
+    df_lr_filtered = df_lr[(df_lr['int_date_dt'] >= start_date) & (df_lr['int_date_dt'] <= yesterday)].copy()
+
+    if not df_lr_filtered.empty:
+        df_lr_filtered['report_date'] = df_lr_filtered['int_date_dt'].dt.strftime('%m/%d/%Y')
+        lr_counts_df = df_lr_filtered.groupby(['report_date', 'Store Code1'])['Hybris Order Number'].nunique().reset_index()
+        lr_counts_df.rename(columns={'Hybris Order Number': 'Distinct_Order_Count'}, inplace=True)
+        lr_counts_df['report_type'] = 'LR Date' # Add type identifier
+        print("✅ Created LR Date distinct counts.")
+    else:
+        print("ℹ️ No LR Date data found for the 5-day window.")
+        lr_counts_df = pd.DataFrame()
+
+    # --- 3. Combine and Save New Data ---
+    new_data_df = pd.concat([order_counts_df, lr_counts_df], ignore_index=True)
+    
+    if new_data_df.empty:
+        print("❌ No new data generated for Sheet3. Skipping upload.")
+        return
+
+    # Save a local copy
+    pivot_output_path = os.path.join(local_data_path, 'Sheet3_distinct_counts_report.csv')
+    new_data_df.to_csv(pivot_output_path, index=False)
+    upload_file_to_drive(drive_service, pivot_output_path, INPUT_OUTPUT_FOLDER_ID)
+
+    # --- 4. Export to Google Sheets (with maturation logic) ---
+    print("--- Reading, Combining, and Exporting Report to Sheet3 ---")
+    target_sheet_name = 'Sheet3'
+    try:
+        spreadsheet = sheets_service.open_by_url(GSHEET_URL)
+        
+        try:
+            worksheet = spreadsheet.worksheet(target_sheet_name)
+            print(f"Reading existing data from '{target_sheet_name}'...")
+            existing_data = worksheet.get_all_records()
+            existing_df = pd.DataFrame(existing_data)
+        except gspread.WorksheetNotFound:
+            print(f"'{target_sheet_name}' not found, will create it and paste new data.")
+            existing_df = pd.DataFrame()
+        except Exception as e:
+            print(f"Warning: Could not read existing data from {target_sheet_name}. Will overwrite. Error: {e}")
+            existing_df = pd.DataFrame()
+
+        if existing_df.empty:
+            print("No existing data found. Pasting newly generated report.")
+            final_df_to_export = new_data_df
+        else:
+            print("Combining old and new data...")
+            try:
+                # Use 'report_date' for comparison
+                existing_df['int_date_dt'] = pd.to_datetime(existing_df['report_date'], format='%m/%d/%Y', errors='coerce')
+                
+                # Keep all data *before* this new 5-day window
+                old_data_to_keep = existing_df[existing_df['int_date_dt'] < start_date].copy()
+                
+                # Concatenate the old, untouched data with the new, refreshed data
+                final_df_to_export = pd.concat([old_data_to_keep, new_data_df], ignore_index=True)
+                
+                if 'int_date_dt' in final_df_to_export.columns:
+                    final_df_to_export = final_df_to_export.drop(columns=['int_date_dt'])
+                
+                print(f"Successfully combined {len(old_data_to_keep)} old rows with {len(new_data_df)} new rows for {target_sheet_name}.")
+            
+            except Exception as e:
+                print(f"Error combining data for {target_sheet_name}: {e}. Will just export the new 5-day report.")
+                final_df_to_export = new_data_df
+
+        # Export the final combined dataframe
+        export_df_to_gsheet(spreadsheet, final_df_to_export, target_sheet_name)
+    
+    except Exception as e:
+        print(f"\n❌ An error occurred during the Google Sheets export process for {target_sheet_name}: {e}")
+
+    print(f"--- Finished processing for {target_sheet_name} ---")
+
 if __name__ == "__main__":
     main()
+
+# Call 3: Process the Distinct Counts report for Sheet3
+    process_and_upload_sheet3_reports(
+        df_original=df_main,
+        sheets_service=sheets_service,
+        drive_service=drive_service,
+        local_data_path=local_data_path
+    )
