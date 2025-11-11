@@ -101,7 +101,8 @@ def export_df_to_gsheet(spreadsheet, df_to_export, sheet_name):
 
 # --- NEW MODULAR FUNCTION ---
 
-def process_and_upload_pivot_report(df_original, cat_df, sheets_service, date_column_name, target_sheet_name, local_data_path):
+# *** Function definition updated to accept drive_service ***
+def process_and_upload_pivot_report(df_original, cat_df, sheets_service, drive_service, date_column_name, target_sheet_name, local_data_path):
     """
     Generates a pivot report based on a dynamic date column and uploads it to a specific sheet.
     """
@@ -172,8 +173,8 @@ def process_and_upload_pivot_report(df_original, cat_df, sheets_service, date_co
     # Save file locally (reset_index so all index levels are columns)
     pivot_report_df.reset_index().to_csv(pivot_output_path, index=False)
     
-    # Upload to Google Drive (using helper function)
-    upload_file_to_drive(sheets_service.auth.service, pivot_output_path, INPUT_OUTPUT_FOLDER_ID)
+    # *** Call updated to use the drive_service variable ***
+    upload_file_to_drive(drive_service, pivot_output_path, INPUT_OUTPUT_FOLDER_ID)
 
     # --- 5. Exporting Report to Google Sheets (with maturation logic) ---
     print(f"--- Reading, Combining, and Exporting Report to {target_sheet_name} ---")
@@ -247,8 +248,8 @@ def main():
     drive_service = build('drive', 'v3', credentials=creds)
     sheets_service = gspread.authorize(creds)
     
-    # Add drive_service to sheets_service.auth for the helper function to use
-    sheets_service.auth.service = drive_service
+    # *** This failing line has been removed ***
+    # sheets_service.auth.service = drive_service
     
     print("✅ Authentication successful.")
     print("-" * 30)
@@ -284,20 +285,24 @@ def main():
     # --- 4. Process and Upload Reports ---
     
     # Call 1: Process the Order Date report for Sheet1
+    # *** Call updated to pass drive_service ***
     process_and_upload_pivot_report(
         df_original=df_main, 
         cat_df=cat_df_main, 
         sheets_service=sheets_service, 
+        drive_service=drive_service,
         date_column_name="Order Date IST", 
         target_sheet_name="Sheet1",
         local_data_path=local_data_path
     )
     
     # Call 2: Process the LR Date report for Sheet2
+    # *** Call updated to pass drive_service ***
     process_and_upload_pivot_report(
         df_original=df_main, 
         cat_df=cat_df_main, 
         sheets_service=sheets_service, 
+        drive_service=drive_service,
         date_column_name="LR Date Time", 
         target_sheet_name="Sheet2",
         local_data_path=local_data_path
