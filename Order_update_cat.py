@@ -1,4 +1,4 @@
-# Order_update_cat.py - Generates Daily Pivot Report for Last 5 Days (Matured)
+# Order_update_cat.py - Generates Daily Pivot Reports
 
 import os
 import json
@@ -13,7 +13,6 @@ import io
 # --- 1. USER CONFIGURATION: You must edit these values ---
 
 # Paste the ID for the folder where ALL your input and output files are located.
-# This is the most important setting.
 INPUT_OUTPUT_FOLDER_ID = '1a7BSDVcQOXon5jP2CoGSpodnv7Ggj9Da' # Re-use your original folder ID
 
 # Paste the full URL of your target Google Sheet.
@@ -24,7 +23,7 @@ GSHEET_URL = 'https://docs.google.com/spreadsheets/d/1xM7KlPutdAvF_UttWkDBtzfhjB
 # Define the scopes for the APIs (permissions).
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
 
-# --- Helper Functions for Google Drive & Sheets ---
+# --- Helper Functions for Google Drive & Sheets (Unchanged) ---
 
 def get_file_id_by_name(service, file_name, folder_id):
     """Finds a file's ID by its name within a specific folder."""
@@ -100,6 +99,141 @@ def export_df_to_gsheet(spreadsheet, df_to_export, sheet_name):
         print(f"\n❌ An error occurred during the export to '{sheet_name}': {e}")
 
 
+# --- NEW MODULAR FUNCTION ---
+
+def process_and_upload_pivot_report(df_original, cat_df, sheets_service, date_column_name, target_sheet_name, local_data_path):
+    """
+    Generates a pivot report based on a dynamic date column and uploads it to a specific sheet.
+    """
+    print("=" * 40)
+    print(f"Processing Report for: {target_sheet_name} (using {date_column_name})")
+    print("=" * 40)
+    
+    # --- 3. Loading and Processing Data ---
+    # Create a copy to avoid modifying the original dataframe
+    df = df_original.copy()
+    
+    # 1. Merge the dataframes to get the grouping
+    print("Merging dataframes and adding 'grouping' column...")
+    df = pd.merge(
+        df, 
+        cat_df[['Subcategory Description', 'Grouping']], 
+        on='Subcategory Description', 
+        how='left'
+    )
+    
+    # 2. Create the 'grouping' column, filling NaNs with 'Miscellaneous'
+    df['grouping'] = df['Grouping'].fillna('Miscellaneous')
+    df.drop(columns=['Grouping'], inplace=True) # Drop the original column
+
+    # 3. Convert the specified date column to a datetime object
+    # This logic handles "10/28/2025 17:36" or "11/5/2025 10:30"
+    print(f"Parsing date column: {date_column_name}")
+    df['int_date_dt'] = pd.to_datetime(df[date_column_name].astype(str).str.split(' ').str[0], errors='coerce')
+
+    # 4. Ensure 'Item Gross Weight' is numeric for sum()
+    df['Item Gross Weight'] = pd.to_numeric(df['Item Gross Weight'], errors='coerce')
+    
+    # 5. Define date range for the 5-day window ending yesterday
+    today = pd.to_datetime('today').normalize()
+    yesterday = today - pd.Timedelta(days=1)
+    start_date = yesterday - pd.Timedelta(days=4)
+    
+    print(f"Filtering for 5-day matured window: {start_date.strftime('%Y-%m-%d')} to {yesterday.strftime('%Y-%m-%d')}")
+    
+    # 6. Filter the DataFrame for this 5-day window
+    df_filtered = df[(df['int_date_dt'] >= start_date) & (df['int_date_dt'] <= yesterday)].copy()
+    
+    # 7. Create the final string date column, now named 'report_date'
+    df_filtered['report_date'] = df_filtered['int_date_dt'].dt.strftime('%m/%d/%Y')
+    
+    # 8. Create the pivot table
+    if df_filtered.empty:
+        print(f"❌ No data found for {target_sheet_name} in the 5-day window.")
+        pivot_report_df = pd.DataFrame() # No new data
+    else:
+        print("Creating pivot table...")
+        pivot_report_df = df_filtered.pivot_table(
+            index=['report_date', 'Store Code1', 'Mode of Fullfillment'], # Rows
+            columns=['grouping'],                                         # Columns
+            values='Item Gross Weight',                                   # Values
+            aggfunc='sum',                                                # Aggregation
+            fill_value=0                                                  # Fill missing with 0
+        )
+    
+    print("✅ Pivot table created successfully.")
+
+    # --- 4. Saving & Uploading Output File ---
+    print("--- Saving report locally before uploading to Drive ---")
+    
+    # Create a dynamic filename
+    pivot_output_path = os.path.join(local_data_path, f'{target_sheet_name}_pivot_report.csv')
+
+    # Save file locally (reset_index so all index levels are columns)
+    pivot_report_df.reset_index().to_csv(pivot_output_path, index=False)
+    
+    # Upload to Google Drive (using helper function)
+    upload_file_to_drive(sheets_service.auth.service, pivot_output_path, INPUT_OUTPUT_FOLDER_ID)
+
+    # --- 5. Exporting Report to Google Sheets (with maturation logic) ---
+    print(f"--- Reading, Combining, and Exporting Report to {target_sheet_name} ---")
+    
+    # Prepare the new data
+    new_data_df = pivot_report_df.reset_index()
+
+    try:
+        spreadsheet = sheets_service.open_by_url(GSHEET_URL)
+        
+        # Try to read existing data from the target sheet
+        try:
+            worksheet = spreadsheet.worksheet(target_sheet_name)
+            print(f"Reading existing data from '{target_sheet_name}'...")
+            existing_data = worksheet.get_all_records()
+            existing_df = pd.DataFrame(existing_data)
+        except gspread.WorksheetNotFound:
+            print(f"'{target_sheet_name}' not found, will create it and paste new data.")
+            existing_df = pd.DataFrame()
+        except Exception as e:
+            print(f"Warning: Could not read existing data from {target_sheet_name}. Will overwrite. Error: {e}")
+            existing_df = pd.DataFrame()
+
+        if existing_df.empty:
+            print("No existing data found. Pasting newly generated report.")
+            final_df_to_export = new_data_df
+        else:
+            print("Combining old and new data...")
+            try:
+                # IMPORTANT: Use the generic 'report_date' column for comparison
+                existing_df['int_date_dt'] = pd.to_datetime(existing_df['report_date'], format='%m/%d/%Y', errors='coerce')
+                
+                # `start_date` is the first day of the new report
+                # We want to keep all data *before* this date
+                old_data_to_keep = existing_df[existing_df['int_date_dt'] < start_date].copy()
+                
+                # Concatenate the old, untouched data with the new, refreshed data
+                final_df_to_export = pd.concat([old_data_to_keep, new_data_df], ignore_index=True)
+                
+                # Drop the temporary datetime column if it exists
+                if 'int_date_dt' in final_df_to_export.columns:
+                    final_df_to_export = final_df_to_export.drop(columns=['int_date_dt'])
+                
+                print(f"Successfully combined {len(old_data_to_keep)} old rows with {len(new_data_df)} new rows for {target_sheet_name}.")
+            
+            except Exception as e:
+                print(f"Error combining data for {target_sheet_name}: {e}. Will just export the new 5-day report.")
+                final_df_to_export = new_data_df
+
+        # Export the final combined dataframe
+        export_df_to_gsheet(spreadsheet, final_df_to_export, target_sheet_name)
+    
+    except Exception as e:
+        print(f"\n❌ An error occurred during the Google Sheets export process for {target_sheet_name}: {e}")
+
+    print(f"--- Finished processing for {target_sheet_name} ---")
+
+
+# --- MAIN EXECUTION ---
+
 def main():
     """Main function to run the entire automation process."""
     print("--- 1. Authenticating ---")
@@ -112,6 +246,10 @@ def main():
 
     drive_service = build('drive', 'v3', credentials=creds)
     sheets_service = gspread.authorize(creds)
+    
+    # Add drive_service to sheets_service.auth for the helper function to use
+    sheets_service.auth.service = drive_service
+    
     print("✅ Authentication successful.")
     print("-" * 30)
 
@@ -137,75 +275,36 @@ def main():
     
     print("-" * 30)
 
-    print("--- 3. Loading and Processing Data ---")
-    df = pd.read_csv(local_file_paths['capacity'], low_memory=False)
-    cat_df = pd.read_csv(local_file_paths['grouping'])
-    print("✅ Input files loaded into DataFrames.")
-
-    # --- NEW DATA PROCESSING STARTS HERE ---
-    
-    print("Processing new pivot report...")
-
-    # 1. Merge the dataframes to get the grouping
-    print("Merging dataframes and adding 'grouping' column...")
-    df = pd.merge(
-        df, 
-        cat_df[['Subcategory Description', 'Grouping']], 
-        on='Subcategory Description', 
-        how='left'
-    )
-    
-    # 2. Create the 'grouping' column, filling NaNs with 'Miscellaneous'
-    df['grouping'] = df['Grouping'].fillna('Miscellaneous')
-    df.drop(columns=['Grouping'], inplace=True) # Drop the original column
-
-    # 3. Convert 'Order Date IST' to a datetime object
-    df['int_order_date_dt'] = pd.to_datetime(df['Order Date IST'].astype(str).str.split(' ').str[0], errors='coerce')
-
-    # 4. Ensure 'Item Gross Weight' is numeric for sum()
-    df['Item Gross Weight'] = pd.to_numeric(df['Item Gross Weight'], errors='coerce')
-    
-    # 5. *** NEW DATE LOGIC ***
-    # Define date range for the 5-day window ending yesterday
-    today = pd.to_datetime('today').normalize()
-    yesterday = today - pd.Timedelta(days=1)
-    start_date = yesterday - pd.Timedelta(days=4)
-    
-    print(f"Filtering for 5-day matured window: {start_date.strftime('%Y-%m-%d')} to {yesterday.strftime('%Y-%m-%d')}")
-    
-    # 6. Filter the DataFrame for this 5-day window
-    df_filtered = df[(df['int_order_date_dt'] >= start_date) & (df['int_order_date_dt'] <= yesterday)].copy()
-    
-    # 7. Create the string date column *after* filtering
-    df_filtered['int_order_date'] = df_filtered['int_order_date_dt'].dt.strftime('%m/%d/%Y')
-    
-    # 8. Create the pivot table
-    if df_filtered.empty:
-        print("❌ No data found for the 5-day window. Report will be empty (this may clear your sheet).")
-        pivot_report_df = pd.DataFrame() # No new data
-    else:
-        print("Creating pivot table...")
-        pivot_report_df = df_filtered.pivot_table(
-            index=['int_order_date', 'Store Code1', 'Mode of Fullfillment'], # Rows
-            columns=['grouping'],                                         # Columns
-            values='Item Gross Weight',                                   # Values
-            aggfunc='sum',                                                # Aggregation
-            fill_value=0                                                  # Fill missing with 0
-        )
-    
-    print("✅ Pivot table created successfully.")
+    print("--- 3. Loading Main DataFrames ---")
+    df_main = pd.read_csv(local_file_paths['capacity'], low_memory=False)
+    cat_df_main = pd.read_csv(local_file_paths['grouping'])
+    print("✅ All input files loaded into DataFrames.")
     print("-" * 30)
     
-    # --- END OF NEW DATA PROCESSING ---
-
-    # --- 4. Saving & Uploading Output File ---
-    print("--- Saving report locally before uploading to Drive ---")
-
-    # Define local output file path
-    pivot_output_path = os.path.join(local_data_path, 'daily_order_weight_grouping_pivot.csv')
-
-    # Save file locally (reset_index so all index levels are columns)
-    pivot_report_df.reset_index().to_csv(pivot_output_path, index=False)
+    # --- 4. Process and Upload Reports ---
     
-    # Upload to Google Drive
-    upload_file_to
+    # Call 1: Process the Order Date report for Sheet1
+    process_and_upload_pivot_report(
+        df_original=df_main, 
+        cat_df=cat_df_main, 
+        sheets_service=sheets_service, 
+        date_column_name="Order Date IST", 
+        target_sheet_name="Sheet1",
+        local_data_path=local_data_path
+    )
+    
+    # Call 2: Process the LR Date report for Sheet2
+    process_and_upload_pivot_report(
+        df_original=df_main, 
+        cat_df=cat_df_main, 
+        sheets_service=sheets_service, 
+        date_column_name="LR Date Time", 
+        target_sheet_name="Sheet2",
+        local_data_path=local_data_path
+    )
+    
+    print("=" * 40)
+    print("--- All Reports Finished ---")
+
+if __name__ == "__main__":
+    main()
