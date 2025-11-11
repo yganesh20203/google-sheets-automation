@@ -1,4 +1,4 @@
-# Order_update_cat.py - Generates Daily Pivot Report for Last 6 Days
+# Order_update_cat.py - Generates Daily Pivot Report for Last 6 Days with Grouping
 
 import os
 import json
@@ -112,71 +112,82 @@ def main():
     print("✅ Authentication successful.")
     print("-" * 30)
 
-    print("--- 2. Finding & Downloading Input File ---")
+    print("--- 2. Finding & Downloading Input Files ---")
     local_data_path = 'data'
     os.makedirs(local_data_path, exist_ok=True)
 
-    # We only need 'Capacity_dump.csv' for this specific task
-    input_filename = 'Capacity_dump.csv'
+    # Define all input filenames
+    input_filenames = {
+        'capacity': 'Capacity_dump.csv',
+        'grouping': 'cat_grouping.csv'
+    }
+    local_file_paths = {}
+
+    # Download all files
+    for key, filename in input_filenames.items():
+        file_id = get_file_id_by_name(drive_service, filename, INPUT_OUTPUT_FOLDER_ID)
+        if not file_id:
+            raise FileNotFoundError(f"'{filename}' could not be found in the specified Drive folder.")
+        
+        local_file_paths[key] = os.path.join(local_data_path, filename)
+        download_file_from_drive(drive_service, file_id, local_file_paths[key])
     
-    file_id = get_file_id_by_name(drive_service, input_filename, INPUT_OUTPUT_FOLDER_ID)
-    if not file_id:
-        raise FileNotFoundError(f"'{input_filename}' could not be found in the specified Drive folder.")
-    
-    local_file_path = os.path.join(local_data_path, input_filename)
-    download_file_from_drive(drive_service, file_id, local_file_path)
     print("-" * 30)
 
     print("--- 3. Loading and Processing Data ---")
-    df = pd.read_csv(local_file_path, low_memory=False)
-    print("✅ Input file loaded into DataFrame.")
+    df = pd.read_csv(local_file_paths['capacity'], low_memory=False)
+    cat_df = pd.read_csv(local_file_paths['grouping'])
+    print("✅ Input files loaded into DataFrames.")
 
     # --- NEW DATA PROCESSING STARTS HERE ---
     
     print("Processing new pivot report...")
+
+    # 1. Merge the dataframes to get the grouping
+    print("Merging dataframes and adding 'grouping' column...")
+    df = pd.merge(
+        df, 
+        cat_df[['Subcategory Description', 'Grouping']], 
+        on='Subcategory Description', 
+        how='left'
+    )
     
-    # 1. Convert 'Order Date IST' to a datetime object
-    # This splits '10/28/2025 17:36' and converts '10/28/2025'
+    # 2. Create the 'grouping' column, filling NaNs with 'Miscellaneous'
+    df['grouping'] = df['Grouping'].fillna('Miscellaneous')
+    df.drop(columns=['Grouping'], inplace=True) # Drop the original column
+
+    # 3. Convert 'Order Date IST' to a datetime object
     df['int_order_date_dt'] = pd.to_datetime(df['Order Date IST'].astype(str).str.split(' ').str[0], errors='coerce')
 
-    # 2. Ensure 'Item Gross Weight' is numeric for sum()
+    # 4. Ensure 'Item Gross Weight' is numeric for sum()
     df['Item Gross Weight'] = pd.to_numeric(df['Item Gross Weight'], errors='coerce')
     
-    # 3. Define date range for the last 6 days (today + 5 previous days)
+    # 5. Define date range for the last 6 days (today + 5 previous days)
     today = pd.to_datetime('today').normalize()
     start_date = today - pd.Timedelta(days=5)
     
     print(f"Filtering data for the last 6 days (from {start_date.strftime('%Y-%m-%d')} to {today.strftime('%Y-%m-%d')})...")
     
-    # 4. Filter the DataFrame for the last 6 days
+    # 6. Filter the DataFrame for the last 6 days
     df_filtered = df[(df['int_order_date_dt'] >= start_date) & (df['int_order_date_dt'] <= today)].copy()
     
-    # 5. Create the string date column *after* filtering
+    # 7. Create the string date column *after* filtering
     df_filtered['int_order_date'] = df_filtered['int_order_date_dt'].dt.strftime('%m/%d/%Y')
     
-    # 6. Create the pivot table
+    # 8. Create the pivot table
     if df_filtered.empty:
         print("❌ No data found for the last 6 days. The report will be empty.")
-        # Create an empty df with the expected columns for the GSheet
-        pivot_report_df = pd.DataFrame(columns=['int_order_date', 'Store Code1', 'Mode of Fullfillment', 'Distinct_Order_Count', 'Total_Item_Gross_Weight'])
+        pivot_report_df = pd.DataFrame(columns=['int_order_date', 'Store Code1', 'Mode of Fullfillment'])
     else:
         print("Creating pivot table...")
         pivot_report_df = df_filtered.pivot_table(
-            index=['int_order_date', 'Store Code1', 'Mode of Fullfillment'], # Rows in tabular form
-            values=['Hybris Order Number', 'Item Gross Weight'],
-            aggfunc={
-                'Hybris Order Number': 'nunique', # Distinct count of Hybris Order Number
-                'Item Gross Weight': 'sum'        # Sum of Item Gross Weight
-            },
-            fill_value=0 # Fill missing values with 0
+            index=['int_order_date', 'Store Code1', 'Mode of Fullfillment'], # Rows
+            columns=['grouping'],                                         # Columns
+            values='Item Gross Weight',                                   # Values
+            aggfunc='sum',                                                # Aggregation
+            fill_value=0                                                  # Fill missing with 0
         )
-        
-        # Rename columns for clarity in the final report
-        pivot_report_df.rename(columns={
-            'Hybris Order Number': 'Distinct_Order_Count',
-            'Item Gross Weight': 'Total_Item_Gross_Weight'
-        }, inplace=True)
-
+    
     print("✅ Pivot table created successfully.")
     print("-" * 30)
     
@@ -186,7 +197,7 @@ def main():
     print("--- Saving report locally before uploading to Drive ---")
 
     # Define local output file path
-    pivot_output_path = os.path.join(local_data_path, 'daily_order_weight_pivot_report.csv')
+    pivot_output_path = os.path.join(local_data_path, 'daily_order_weight_grouping_pivot.csv')
 
     # Save file locally (reset_index so all index levels are columns)
     pivot_report_df.reset_index().to_csv(pivot_output_path, index=False)
