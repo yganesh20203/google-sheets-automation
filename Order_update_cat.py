@@ -72,7 +72,7 @@ def upload_file_to_drive(service, local_path, folder_id):
         service.files().create(body=file_metadata, media_body=media, fields='id').execute()
     print(" ✅")
 
-# --- NEW HELPER FUNCTION FOR TIMESTAMP ---
+# --- HELPER FUNCTION FOR TIMESTAMP ---
 def update_timestamp(worksheet):
     """Updates the timestamp and header in cells W1 and W2."""
     header = 'Last Updated At'
@@ -95,7 +95,7 @@ def export_df_to_gsheet(spreadsheet, df_to_export, sheet_name):
     """Exports a Pandas DataFrame to a specific worksheet in a Google Sheet."""
     if df_to_export is None:
         print(f"ℹ️ Skipped exporting '{sheet_name}' as there was no data.")
-        return
+        return None
     try:
         # Reset index if it's not a simple range, (e.g., for pivot tables)
         if not isinstance(df_to_export.index, pd.RangeIndex):
@@ -109,7 +109,7 @@ def export_df_to_gsheet(spreadsheet, df_to_export, sheet_name):
             print(f"Worksheet '{sheet_name}' not found. Creating it...")
             worksheet = spreadsheet.add_worksheet(title=sheet_name, rows="1000", cols="50")
         
-        # *** MODIFIED: Clear only up to column W (A:W) ***
+        # MODIFIED: Clear only up to column W (A:W)
         print(f"Clearing worksheet data range 'A:W' in '{sheet_name}'...")
         worksheet.batch_clear(['A:W'])  
         print(f"Updating worksheet '{sheet_name}' with new data...")
@@ -185,6 +185,11 @@ def process_and_upload_pivot_report(df_original, cat_df, sheets_service, drive_s
             aggfunc='sum',                                               # Aggregation
             fill_value=0                                                 # Fill missing with 0
         )
+        
+        # MODIFIED: CONVERT KG TO TON
+        print("Converting 'Item Gross Weight' from KG to TON (dividing by 1000)...")
+        pivot_report_df = pivot_report_df / 1000
+        
     
     print("✅ Pivot table created successfully.")
 
@@ -205,7 +210,7 @@ def process_and_upload_pivot_report(df_original, cat_df, sheets_service, drive_s
     # Prepare the new data
     new_data_df = pivot_report_df.reset_index()
 
-    worksheet = None # Initialize worksheet outside of try block
+    worksheet = None 
     
     try:
         spreadsheet = sheets_service.open_by_url(GSHEET_URL)
@@ -252,7 +257,7 @@ def process_and_upload_pivot_report(df_original, cat_df, sheets_service, drive_s
         # Export the final combined dataframe. This returns the worksheet object.
         worksheet = export_df_to_gsheet(spreadsheet, final_df_to_export, target_sheet_name)
         
-        # *** NEW: Update the timestamp after a successful export ***
+        # NEW: Update the timestamp after a successful export
         if worksheet:
              update_timestamp(worksheet)
             
@@ -324,7 +329,7 @@ def process_and_upload_sheet3_reports(df_original, sheets_service, drive_service
     # --- 4. Export to Google Sheets (with maturation logic) ---
     print("--- Reading, Combining, and Exporting Report to Sheet3 ---")
     target_sheet_name = 'Sheet3'
-    worksheet = None # Initialize worksheet outside of try block
+    worksheet = None 
 
     try:
         spreadsheet = sheets_service.open_by_url(GSHEET_URL)
@@ -368,7 +373,7 @@ def process_and_upload_sheet3_reports(df_original, sheets_service, drive_service
         # Export the final combined dataframe. This returns the worksheet object.
         worksheet = export_df_to_gsheet(spreadsheet, final_df_to_export, target_sheet_name)
 
-        # *** NEW: Update the timestamp after a successful export ***
+        # NEW: Update the timestamp after a successful export
         if worksheet:
              update_timestamp(worksheet)
         
