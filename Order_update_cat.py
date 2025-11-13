@@ -9,6 +9,7 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 import io
+from datetime import datetime
 
 # --- 1. USER CONFIGURATION: You must edit these values ---
 
@@ -71,6 +72,25 @@ def upload_file_to_drive(service, local_path, folder_id):
         service.files().create(body=file_metadata, media_body=media, fields='id').execute()
     print(" ✅")
 
+# --- NEW HELPER FUNCTION FOR TIMESTAMP ---
+def update_timestamp(worksheet):
+    """Updates the timestamp and header in cells W1 and W2."""
+    header = 'Last Updated At'
+    now_ist = datetime.now().strftime('%Y-%m-%d %H:%M:%S IST')
+    
+    # Batch update W1 (Header) and W2 (Timestamp)
+    data = [
+        {'range': 'W1', 'values': [[header]]},
+        {'range': 'W2', 'values': [[now_ist]]}
+    ]
+    
+    try:
+        worksheet.batch_update(data, value_input_option='USER_ENTERED')
+        print(f"✅ Updated timestamp in W1:W2 to {now_ist}.")
+    except Exception as e:
+        print(f"❌ An error occurred updating the timestamp in '{worksheet.title}': {e}")
+
+
 def export_df_to_gsheet(spreadsheet, df_to_export, sheet_name):
     """Exports a Pandas DataFrame to a specific worksheet in a Google Sheet."""
     if df_to_export is None:
@@ -89,19 +109,23 @@ def export_df_to_gsheet(spreadsheet, df_to_export, sheet_name):
             print(f"Worksheet '{sheet_name}' not found. Creating it...")
             worksheet = spreadsheet.add_worksheet(title=sheet_name, rows="1000", cols="50")
         
-        # Clear a reasonable range. Adjust 'Z' if your pivot is wider.
-        print(f"Clearing worksheet '{sheet_name}'...")
-        worksheet.batch_clear(['A:Z']) 
+        # *** MODIFIED: Clear only up to column W (A:W) ***
+        print(f"Clearing worksheet data range 'A:W' in '{sheet_name}'...")
+        worksheet.batch_clear(['A:W'])  
         print(f"Updating worksheet '{sheet_name}' with new data...")
         worksheet.update(export_data, 'A1', value_input_option='USER_ENTERED')
         print(f"✅ Successfully exported to worksheet: '{sheet_name}'")
+        
+        # Return the worksheet object so the caller can update the timestamp
+        return worksheet 
+
     except Exception as e:
         print(f"\n❌ An error occurred during the export to '{sheet_name}': {e}")
+        return None
 
 
 # --- NEW MODULAR FUNCTION ---
 
-# *** Function definition updated to accept drive_service ***
 def process_and_upload_pivot_report(df_original, cat_df, sheets_service, drive_service, date_column_name, target_sheet_name, local_data_path):
     """
     Generates a pivot report based on a dynamic date column and uploads it to a specific sheet.
@@ -156,10 +180,10 @@ def process_and_upload_pivot_report(df_original, cat_df, sheets_service, drive_s
         print("Creating pivot table...")
         pivot_report_df = df_filtered.pivot_table(
             index=['report_date', 'Store Code1', 'Mode of Fullfillment'], # Rows
-            columns=['grouping'],                                         # Columns
-            values='Item Gross Weight',                                   # Values
-            aggfunc='sum',                                                # Aggregation
-            fill_value=0                                                  # Fill missing with 0
+            columns=['grouping'],                                        # Columns
+            values='Item Gross Weight',                                  # Values
+            aggfunc='sum',                                               # Aggregation
+            fill_value=0                                                 # Fill missing with 0
         )
     
     print("✅ Pivot table created successfully.")
@@ -173,7 +197,6 @@ def process_and_upload_pivot_report(df_original, cat_df, sheets_service, drive_s
     # Save file locally (reset_index so all index levels are columns)
     pivot_report_df.reset_index().to_csv(pivot_output_path, index=False)
     
-    # *** Call updated to use the drive_service variable ***
     upload_file_to_drive(drive_service, pivot_output_path, INPUT_OUTPUT_FOLDER_ID)
 
     # --- 5. Exporting Report to Google Sheets (with maturation logic) ---
@@ -182,6 +205,8 @@ def process_and_upload_pivot_report(df_original, cat_df, sheets_service, drive_s
     # Prepare the new data
     new_data_df = pivot_report_df.reset_index()
 
+    worksheet = None # Initialize worksheet outside of try block
+    
     try:
         spreadsheet = sheets_service.open_by_url(GSHEET_URL)
         
@@ -224,9 +249,13 @@ def process_and_upload_pivot_report(df_original, cat_df, sheets_service, drive_s
                 print(f"Error combining data for {target_sheet_name}: {e}. Will just export the new 5-day report.")
                 final_df_to_export = new_data_df
 
-        # Export the final combined dataframe
-        export_df_to_gsheet(spreadsheet, final_df_to_export, target_sheet_name)
-    
+        # Export the final combined dataframe. This returns the worksheet object.
+        worksheet = export_df_to_gsheet(spreadsheet, final_df_to_export, target_sheet_name)
+        
+        # *** NEW: Update the timestamp after a successful export ***
+        if worksheet:
+             update_timestamp(worksheet)
+            
     except Exception as e:
         print(f"\n❌ An error occurred during the Google Sheets export process for {target_sheet_name}: {e}")
 
@@ -255,7 +284,7 @@ def process_and_upload_sheet3_reports(df_original, sheets_service, drive_service
     
     if not df_ord_filtered.empty:
         df_ord_filtered['report_date'] = df_ord_filtered['int_date_dt'].dt.strftime('%m/%d/%Y')
-        # *** UPDATED GROUPBY HERE ***
+        # UPDATED GROUPBY HERE
         order_counts_df = df_ord_filtered.groupby(['report_date', 'Store Code1', 'Mode of Fullfillment'])['Hybris Order Number'].nunique().reset_index()
         order_counts_df.rename(columns={'Hybris Order Number': 'Distinct_Order_Count'}, inplace=True)
         order_counts_df['report_type'] = 'Order Date' # Add type identifier
@@ -271,7 +300,7 @@ def process_and_upload_sheet3_reports(df_original, sheets_service, drive_service
 
     if not df_lr_filtered.empty:
         df_lr_filtered['report_date'] = df_lr_filtered['int_date_dt'].dt.strftime('%m/%d/%Y')
-        # *** UPDATED GROUPBY HERE ***
+        # UPDATED GROUPBY HERE
         lr_counts_df = df_lr_filtered.groupby(['report_date', 'Store Code1', 'Mode of Fullfillment'])['Hybris Order Number'].nunique().reset_index()
         lr_counts_df.rename(columns={'Hybris Order Number': 'Distinct_Order_Count'}, inplace=True)
         lr_counts_df['report_type'] = 'LR Date' # Add type identifier
@@ -295,6 +324,8 @@ def process_and_upload_sheet3_reports(df_original, sheets_service, drive_service
     # --- 4. Export to Google Sheets (with maturation logic) ---
     print("--- Reading, Combining, and Exporting Report to Sheet3 ---")
     target_sheet_name = 'Sheet3'
+    worksheet = None # Initialize worksheet outside of try block
+
     try:
         spreadsheet = sheets_service.open_by_url(GSHEET_URL)
         
@@ -334,9 +365,13 @@ def process_and_upload_sheet3_reports(df_original, sheets_service, drive_service
                 print(f"Error combining data for {target_sheet_name}: {e}. Will just export the new 5-day report.")
                 final_df_to_export = new_data_df
 
-        # Export the final combined dataframe
-        export_df_to_gsheet(spreadsheet, final_df_to_export, target_sheet_name)
-    
+        # Export the final combined dataframe. This returns the worksheet object.
+        worksheet = export_df_to_gsheet(spreadsheet, final_df_to_export, target_sheet_name)
+
+        # *** NEW: Update the timestamp after a successful export ***
+        if worksheet:
+             update_timestamp(worksheet)
+        
     except Exception as e:
         print(f"\n❌ An error occurred during the Google Sheets export process for {target_sheet_name}: {e}")
 
@@ -356,9 +391,6 @@ def main():
 
     drive_service = build('drive', 'v3', credentials=creds)
     sheets_service = gspread.authorize(creds)
-    
-    # *** This failing line has been removed ***
-    # sheets_service.auth.service = drive_service
     
     print("✅ Authentication successful.")
     print("-" * 30)
@@ -415,7 +447,6 @@ def main():
         local_data_path=local_data_path
     )
     
-    # *** THIS IS THE CORRECT LOCATION FOR THE NEW CALL ***
     # Call 3: Process the Distinct Counts report for Sheet3
     process_and_upload_sheet3_reports(
         df_original=df_main,
@@ -430,5 +461,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-# *** THE CODE BLOCK THAT WAS HERE IS NOW MOVED UP INSIDE main() ***
