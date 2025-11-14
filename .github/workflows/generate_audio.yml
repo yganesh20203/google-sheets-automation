@@ -24,13 +24,23 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg wget
           
-          # Download and install the Piper TTS binary (required by your script)
+          # Download the Piper TTS binary (tar.gz archive)
           echo "Downloading Piper TTS binary..."
-          wget https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_1.2.0_amd64.deb
+          wget https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_linux_x86_64.tar.gz
           
-          echo "Installing Piper TTS..."
-          # Use 'apt-get install -f' to automatically fetch any missing dependencies for the .deb file
-          sudo dpkg -i ./piper_1.2.0_amd64.deb || sudo apt-get install -f -y
+          echo "Extracting Piper TTS..."
+          # Extract the tar.gz archive
+          tar -zxvf piper_linux_x86_64.tar.gz
+          
+          echo "Installing Piper TTS to /usr/bin/..."
+          # Move the 'piper' binary to a directory in the system PATH
+          # The 'piper' executable is inside the extracted 'piper-linux-x86_64' directory
+          sudo mv ./piper-linux-x86_64/piper /usr/bin/
+          
+          # Clean up the downloaded archive and extracted folder
+          echo "Cleaning up installer files..."
+          rm piper_linux_x86_64.tar.gz
+          rm -r ./piper-linux-x86_64
           
           # Verify installations
           echo "Verifying installations..."
