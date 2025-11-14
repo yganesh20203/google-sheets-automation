@@ -72,27 +72,16 @@ def upload_file_to_drive(service, local_path, folder_id):
         service.files().create(body=file_metadata, media_body=media, fields='id').execute()
     print(" ✅")
 
-# --- HELPER FUNCTION FOR TIMESTAMP ---
-def update_timestamp(worksheet):
-    """Updates the timestamp and header in cells W1 and W2."""
-    header = 'Last Updated At'
-    now_ist = datetime.now().strftime('%Y-%m-%d %H:%M:%S IST')
-    
-    # Batch update W1 (Header) and W2 (Timestamp)
-    data = [
-        {'range': 'W1', 'values': [[header]]},
-        {'range': 'W2', 'values': [[now_ist]]}
-    ]
-    
-    try:
-        worksheet.batch_update(data, value_input_option='USER_ENTERED')
-        print(f"✅ Updated timestamp in W1:W2 to {now_ist}.")
-    except Exception as e:
-        print(f"❌ An error occurred updating the timestamp in '{worksheet.title}': {e}")
+# --- HELPER FUNCTION FOR TIMESTAMP (REMOVED) ---
+# The old update_timestamp function is no longer needed.
+# Logic is now inside export_df_to_gsheet.
 
 
 def export_df_to_gsheet(spreadsheet, df_to_export, sheet_name):
-    """Exports a Pandas DataFrame to a specific worksheet in a Google Sheet."""
+    """
+    Exports a Pandas DataFrame to a specific worksheet in a Google Sheet
+    and adds the 'Last Updated At' timestamp to every data row.
+    """
     if df_to_export is None:
         print(f"ℹ️ Skipped exporting '{sheet_name}' as there was no data.")
         return None
@@ -101,13 +90,11 @@ def export_df_to_gsheet(spreadsheet, df_to_export, sheet_name):
         if not isinstance(df_to_export.index, pd.RangeIndex):
             df_to_export = df_to_export.reset_index()
         
-        # --- FIX: These lines are now correctly indented ---
-        # Replace Infinity/-Infinity with NaN, as fillna() only works on NaN
+        # --- FIX: Clean data for JSON compatibility ---
         df_to_export.replace([np.inf, -np.inf], np.nan, inplace=True)
-        # Replace all NaN values with an empty string. JSON can handle this.
         df_to_export.fillna("", inplace=True)
-        # --- END FIX ---
 
+        # Prepare data for export (Headers + Data)
         export_data = [df_to_export.columns.values.tolist()] + df_to_export.values.tolist()
 
         try:
@@ -123,7 +110,27 @@ def export_df_to_gsheet(spreadsheet, df_to_export, sheet_name):
         worksheet.update(export_data, 'A1', value_input_option='USER_ENTERED')
         print(f"✅ Successfully exported to worksheet: '{sheet_name}'")
         
-        # Return the worksheet object so the caller can update the timestamp
+        # --- NEW TIMESTAMP LOGIC ---
+        num_data_rows = len(df_to_export)
+        if num_data_rows > 0:
+            print(f"Updating timestamp for {num_data_rows} rows in column W...")
+            header = 'Last Updated At'
+            now_ist = datetime.now().strftime('%Y-%m-%d %H:%M:%S IST')
+            
+            # Create a list of lists, one timestamp for each data row
+            # e.g., [['2025-11-14...'], ['2025-11-14...'], ...]
+            timestamp_values = [[now_ist]] * num_data_rows 
+            
+            # Prepare batch update for W1 (Header) and W2:W... (Data)
+            data_to_paste = [
+                {'range': 'W1', 'values': [[header]]},
+                {'range': f'W2:W{num_data_rows + 1}', 'values': timestamp_values}
+            ]
+            
+            worksheet.batch_update(data_to_paste, value_input_option='USER_ENTERED')
+            print(f"✅ Updated timestamp in W1:W{num_data_rows + 1} to {now_ist}.")
+        # --- END NEW TIMESTAMP LOGIC ---
+
         return worksheet  
 
     except Exception as e:
@@ -159,7 +166,6 @@ def process_and_upload_pivot_report(df_original, cat_df, sheets_service, drive_s
     df.drop(columns=['Grouping'], inplace=True) # Drop the original column
 
     # 3. Convert the specified date column to a datetime object
-    # This logic handles "10/28/2025 17:36" or "11/5/2025 10:30"
     print(f"Parsing date column: {date_column_name}")
     df['int_date_dt'] = pd.to_datetime(df[date_column_name].astype(str).str.split(' ').str[0], errors='coerce')
 
@@ -216,8 +222,6 @@ def process_and_upload_pivot_report(df_original, cat_df, sheets_service, drive_s
     
     # Prepare the new data
     new_data_df = pivot_report_df.reset_index()
-
-    worksheet = None  
     
     try:
         spreadsheet = sheets_service.open_by_url(GSHEET_URL)
@@ -261,12 +265,9 @@ def process_and_upload_pivot_report(df_original, cat_df, sheets_service, drive_s
                 print(f"Error combining data for {target_sheet_name}: {e}. Will just export the new 5-day report.")
                 final_df_to_export = new_data_df
 
-        # Export the final combined dataframe. This returns the worksheet object.
-        worksheet = export_df_to_gsheet(spreadsheet, final_df_to_export, target_sheet_name)
-        
-        # NEW: Update the timestamp after a successful export
-        if worksheet:
-             update_timestamp(worksheet)
+        # --- MODIFIED: Removed call to update_timestamp ---
+        # Export the final combined dataframe. Timestamp is handled inside.
+        export_df_to_gsheet(spreadsheet, final_df_to_export, target_sheet_name)
             
     except Exception as e:
         print(f"\n❌ An error occurred during the Google Sheets export process for {target_sheet_name}: {e}")
@@ -296,7 +297,6 @@ def process_and_upload_sheet3_reports(df_original, sheets_service, drive_service
     
     if not df_ord_filtered.empty:
         df_ord_filtered['report_date'] = df_ord_filtered['int_date_dt'].dt.strftime('%m/%d/%Y')
-        # UPDATED GROUPBY HERE
         order_counts_df = df_ord_filtered.groupby(['report_date', 'Store Code1', 'Mode of Fullfillment'])['Hybris Order Number'].nunique().reset_index()
         order_counts_df.rename(columns={'Hybris Order Number': 'Distinct_Order_Count'}, inplace=True)
         order_counts_df['report_type'] = 'Order Date' # Add type identifier
@@ -312,7 +312,6 @@ def process_and_upload_sheet3_reports(df_original, sheets_service, drive_service
 
     if not df_lr_filtered.empty:
         df_lr_filtered['report_date'] = df_lr_filtered['int_date_dt'].dt.strftime('%m/%d/%Y')
-        # UPDATED GROUPBY HERE
         lr_counts_df = df_lr_filtered.groupby(['report_date', 'Store Code1', 'Mode of Fullfillment'])['Hybris Order Number'].nunique().reset_index()
         lr_counts_df.rename(columns={'Hybris Order Number': 'Distinct_Order_Count'}, inplace=True)
         lr_counts_df['report_type'] = 'LR Date' # Add type identifier
@@ -336,7 +335,6 @@ def process_and_upload_sheet3_reports(df_original, sheets_service, drive_service
     # --- 4. Export to Google Sheets (with maturation logic) ---
     print("--- Reading, Combining, and Exporting Report to Sheet3 ---")
     target_sheet_name = 'Sheet3'
-    worksheet = None  
 
     try:
         spreadsheet = sheets_service.open_by_url(GSHEET_URL)
@@ -377,12 +375,9 @@ def process_and_upload_sheet3_reports(df_original, sheets_service, drive_service
                 print(f"Error combining data for {target_sheet_name}: {e}. Will just export the new 5-day report.")
                 final_df_to_export = new_data_df
 
-        # Export the final combined dataframe. This returns the worksheet object.
-        worksheet = export_df_to_gsheet(spreadsheet, final_df_to_export, target_sheet_name)
-
-        # NEW: Update the timestamp after a successful export
-        if worksheet:
-             update_timestamp(worksheet)
+        # --- MODIFIED: Removed call to update_timestamp ---
+        # Export the final combined dataframe. Timestamp is handled inside.
+        export_df_to_gsheet(spreadsheet, final_df_to_export, target_sheet_name)
         
     except Exception as e:
         print(f"\n❌ An error occurred during the Google Sheets export process for {target_sheet_name}: {e}")
