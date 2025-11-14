@@ -34,7 +34,7 @@ print("✅ Libraries imported successfully!")
 
 def setup_google_auth(secret_env_var_name):
     """
-    Reads a base64-encoded Google Secret, decodes it,
+    Reads a raw JSON string from an environment variable
     and saves it to a temporary file.
     """
     print("Setting up Google Authentication...")
@@ -46,23 +46,20 @@ def setup_google_auth(secret_env_var_name):
         return None
 
     try:
-        # Decode the base64 string
-        creds_json = base64.b64decode(creds_json_string).decode('utf-8')
-        
-        # Define a local path for the credentials file
+        # NO Base64 decoding needed, we use the raw string
         local_creds_path = "sa_creds.json"
         
-        # Write the decoded JSON to the file
+        # Write the raw JSON string directly to the file
         with open(local_creds_path, 'w') as f:
-            f.write(creds_json)
+            f.write(creds_json_string) 
             
         print(f"✅ Service account key written to {local_creds_path}")
         return local_creds_path
         
     except Exception as e:
-        print(f"❌ ERROR: Failed to decode or write service account key: {e}")
+        print(f"❌ ERROR: Failed to write service account key: {e}")
         return None
-
+        
 def authenticate_google(service_account_json_path):
     """Authenticates with Google using a service account JSON file."""
     print(f"Authenticating using: {service_account_json_path}")
