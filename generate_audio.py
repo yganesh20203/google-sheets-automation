@@ -13,8 +13,7 @@ import shutil
 from pathlib import Path
 import glob
 import subprocess
-import base64  # For decoding GitHub Secret
-
+import base64
 import pandas as pd
 import requests
 from gtts import gTTS  # Google Text-to-Speech (Fallback)
@@ -23,7 +22,7 @@ from gtts import gTTS  # Google Text-to-Speech (Fallback)
 import gspread
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 from google.auth.exceptions import GoogleAuthError
 
 print("✅ Libraries imported successfully!")
@@ -69,7 +68,7 @@ def authenticate_google(service_account_json_path):
     ]
     try:
         creds = Credentials.from_service_account_file(service_account_json_path, scopes=SCOPES)
-        gc_client = gspread.authorize(creds)
+        gc_client = gspread.authorize(creds) # Still needed for gspread if you add sheets later
         drive_service = build('drive', 'v3', credentials=creds)
         print("✅ Google Authentication successful.")
         return gc_client, drive_service
@@ -87,12 +86,15 @@ def find_file_id(service, parent_folder_id, file_name):
     """Finds a file's ID in a specific Google Drive folder."""
     print(f"   - Searching for file '{file_name}' in folder '{parent_folder_id}'...")
     try:
+        # Query for the specific file name in the parent folder
         query = f"'{parent_folder_id}' in parents and name='{file_name}' and trashed=false"
         response = service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
         files = response.get('files', [])
+        
         if not files:
             print(f"   - ❌ WARNING: File not found: {file_name}")
             return None
+            
         file_id = files[0]['id']
         print(f"   - ✅ Found file: {file_name} (ID: {file_id})")
         return file_id
@@ -100,32 +102,46 @@ def find_file_id(service, parent_folder_id, file_name):
         print(f"   - ❌ ERROR searching for file '{file_name}': {e}")
         return None
 
-def get_google_sheet_data(gc_client, sheet_file_id, worksheet_name="offer_articles"):
-    """Fetches a Google Sheet worksheet into a pandas DataFrame."""
-    print(f"Fetching Google Sheet data... (Sheet ID: {sheet_file_id}, Worksheet: {worksheet_name})")
+def download_file_from_drive(drive_service, file_id, local_download_path):
+    """Downloads a file from Google Drive."""
+    print(f"   - Downloading file ID '{file_id}' to '{local_download_path}'...")
     try:
-        spreadsheet = gc_client.open_by_key(sheet_file_id)
-        worksheet = spreadsheet.worksheet(worksheet_name)
-    except gspread.exceptions.WorksheetNotFound:
-        print(f"   - ⚠️ Warning: Worksheet '{worksheet_name}' not found. Trying 'Sheet1'.")
-        try:
-            worksheet = spreadsheet.sheet1
-        except Exception as e:
-            print(f"   - ❌ ERROR: Could not find '{worksheet_name}' or 'Sheet1'. {e}")
-            raise
+        request = drive_service.files().get_media(fileId=file_id)
+        fh = io.FileIO(local_download_path, 'wb')
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+            if status:
+                print(f"     - Download {int(status.progress() * 100)}%.")
+        print(f"   - ✅ Download complete: {local_download_path}")
+        return True
     except Exception as e:
-        print(f"❌ ERROR opening Google Sheet: {e}")
-        raise
+        print(f"   - ❌ ERROR downloading file: {e}")
+        return False
 
-    try:
-        data = worksheet.get_all_records()
-        df = pd.DataFrame(data)
+def get_data_from_csv(drive_service, drive_folder_id, csv_file_name):
+    """Finds, downloads, and reads a CSV file from Drive into a DataFrame."""
+    print(f"Fetching CSV data... (File: {csv_file_name})")
+    
+    # 1. Find the file
+    file_id = find_file_id(drive_service, drive_folder_id, csv_file_name)
+    if not file_id:
+        raise RuntimeError(f"Could not find CSV file '{csv_file_name}' in input folder.")
         
+    # 2. Download the file
+    local_csv_path = "./offer_articles.csv"
+    if not download_file_from_drive(drive_service, file_id, local_csv_path):
+        raise RuntimeError(f"Failed to download CSV file from Drive.")
+        
+    # 3. Read the CSV file
+    try:
+        df = pd.read_csv(local_csv_path)
         if df.empty:
-            print("   - ❌ ERROR: The Google Sheet is empty or could not be read.")
+            print("   - ❌ ERROR: The CSV file is empty.")
             return None
             
-        print(f"✅ Google Sheet data loaded successfully ({len(df)} rows).")
+        print(f"✅ CSV data loaded successfully ({len(df)} rows).")
         
         # --- Column Validation ---
         required_headers = [
@@ -139,16 +155,16 @@ def get_google_sheet_data(gc_client, sheet_file_id, worksheet_name="offer_articl
         
         missing_headers = [col for col in required_headers if col not in df.columns]
         if missing_headers:
-            print(f"❌ ERROR: The Google Sheet is missing required columns: {missing_headers}")
-            print(f"   Please ensure your sheet has these exact headers: {required_headers}")
+            print(f"❌ ERROR: The CSV file is missing required columns: {missing_headers}")
+            print(f"   Please ensure your file has these exact headers: {required_headers}")
             print(f"   Found headers: {list(df.columns)}")
             return None
             
-        print("   - All required columns found in Google Sheet.")
+        print("   - All required columns found in CSV file.")
         return df
         
     except Exception as e:
-        print(f"❌ ERROR fetching Google Sheet data: {e}")
+        print(f"❌ ERROR reading local CSV file: {e}")
         raise
 
 def create_drive_folder(service, parent_id, folder_name):
@@ -311,7 +327,7 @@ def generate_offer_text(language_code, product_name, mrp, selling_price, discoun
 print("✅ TTS text generation functions defined!")
 
 # =============================================================================
-# SECTION 4: PIPER TTS AUDIO GENERATION (UPDATED)
+# SECTION 4: PIPER TTS AUDIO GENERATION (LIBRARY VERSION)
 # =============================================================================
 
 def ensure_piper_voice_lib(model_id: str, voices_dir: str):
@@ -330,7 +346,7 @@ def ensure_piper_voice_lib(model_id: str, voices_dir: str):
         print("   - ✅ Voice files already exist.")
         return True
         
-    print("   - Voice not found locally. Downloading...")
+    print(f"   - Voice '{model_id}' not found locally. Downloading...")
     try:
         # Use the library's built-in downloader
         command = [
@@ -350,7 +366,7 @@ def ensure_piper_voice_lib(model_id: str, voices_dir: str):
         print(f"     - Stderr: {e.stderr}")
         return False
     except Exception as e:
-        print(f"   - ❌ ERROR downloading voice: {e}")
+        print(f"   - ❌ ERROR downloading voice '{model_id}': {e}")
         return False
 
 def generate_piper_tts_audio_lib(
@@ -466,14 +482,18 @@ def main():
     GCP_SECRET_NAME = "GCP_SA_KEY"
     DRIVE_INPUT_FOLDER_ID = "1J2epmcfA8hT8YFk4Q7G9LM3qLZzw3W_H"
     DRIVE_OUTPUT_FOLDER_ID = "1EgSz_-mkxK-L0inIu0-_gJuES8267zfo"
-    SHEET_FILE_NAME = "offer_articles"
-    WORKSHEET_NAME = "offer_articles"
     
-    LOCAL_VOICES_DIR = "./voices" # Use the same dir as the YAML test step
+    # --- FIX 1: Use the correct CSV file name ---
+    SHEET_FILE_NAME = "offer_articles.csv" 
+    WORKSHEET_NAME = "offer_articles" # This is now unused but harmless
+    
+    LOCAL_VOICES_DIR = "./voices" 
     LOCAL_OUTPUT_DIR = "./audio_outputs"
     
     PIPER_VOICE_HI = "hi_IN-priyamvada-medium"
-    PIPER_VOICE_TE = "te_IN-sushma-medium"
+    
+    # --- FIX 2: Use a valid Telugu voice model ID ---
+    PIPER_VOICE_TE = "te_IN-padmavathi-medium" 
     
     HINDI_STORE_CODES = {
         4702, 4703, 4706, 4712, 4713, 4716, 4717, 4719, 4720, 
@@ -501,23 +521,19 @@ def main():
         hindi_model_ok = ensure_piper_voice_lib(PIPER_VOICE_HI, LOCAL_VOICES_DIR)
         if not hindi_model_ok:
             print(f"   - ⚠️ WARNING: Failed to download Hindi voice model {PIPER_VOICE_HI}.")
-            # We don't exit, as some stores might be Telugu-only
         
         telugu_model_ok = ensure_piper_voice_lib(PIPER_VOICE_TE, LOCAL_VOICES_DIR)
         if not telugu_model_ok:
             print(f"   - ⚠️ WARNING: Failed to download Telugu voice model {PIPER_VOICE_TE}.")
-            # We don't exit, as some stores might be Hindi-only
             
         if not (hindi_model_ok or telugu_model_ok):
             raise RuntimeError("Failed to download *any* TTS models. Aborting.")
             
-        # --- 4. Get Sheet Data ---
+        # --- 4. Get Sheet Data (from CSV) ---
         print("\n--- Fetching Google Sheet Data ---")
-        sheet_file_id = find_file_id(drive_service, DRIVE_INPUT_FOLDER_ID, SHEET_FILE_NAME)
-        if not sheet_file_id:
-            raise RuntimeError(f"Could not find Google Sheet '{SHEET_FILE_NAME}' in input folder.")
-            
-        df = get_google_sheet_data(gc_client, sheet_file_id, worksheet_name=WORKSHEET_NAME)
+        # Use the new function to get data from the CSV
+        df = get_data_from_csv(drive_service, DRIVE_INPUT_FOLDER_ID, SHEET_FILE_NAME)
+        
         if df is None or df.empty:
             raise RuntimeError("Failed to load data or DataFrame is empty.")
 
@@ -634,6 +650,7 @@ def main():
         # safe_rmtree(LOCAL_VOICES_DIR) 
         safe_rmtree(LOCAL_OUTPUT_DIR)
         safe_rmtree("./tmp_audio")
+        safe_remove("./offer_articles.csv") # Remove downloaded CSV
         if local_creds_path:
             safe_remove(local_creds_path)
             
