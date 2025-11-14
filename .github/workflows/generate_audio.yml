@@ -26,8 +26,8 @@ jobs:
           
           # Download the Piper TTS binary (tar.gz archive)
           echo "Downloading Piper TTS binary..."
-          # CORRECTED URL: Note the hyphen in 'piper-linux-x86_64'
-          wget https://github.com/rhasspy/piper/releases/download/v1.2.0/piper-linux-x86_64.tar.gz
+          # --- CORRECTED URL: Pointing to the LATEST v1.3.0 release ---
+          wget https://github.com/rhasspy/piper/releases/download/v1.3.0/piper-linux-x86_64.tar.gz
           
           echo "Extracting Piper TTS..."
           # Extract the tar.gz archive
