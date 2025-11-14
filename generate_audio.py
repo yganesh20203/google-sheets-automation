@@ -59,7 +59,7 @@ def setup_google_auth(secret_env_var_name):
     except Exception as e:
         print(f"❌ ERROR: Failed to write service account key: {e}")
         return None
-        
+
 def authenticate_google(service_account_json_path):
     """Authenticates with Google using a service account JSON file."""
     print(f"Authenticating using: {service_account_json_path}")
@@ -128,7 +128,6 @@ def get_google_sheet_data(gc_client, sheet_file_id, worksheet_name="offer_articl
         print(f"✅ Google Sheet data loaded successfully ({len(df)} rows).")
         
         # --- Column Validation ---
-        # Map user's B, C, D... to expected headers
         required_headers = [
             'Article name',  # Col B
             'current mrp',   # Col C
@@ -312,85 +311,65 @@ def generate_offer_text(language_code, product_name, mrp, selling_price, discoun
 print("✅ TTS text generation functions defined!")
 
 # =============================================================================
-# SECTION 4: PIPER TTS AUDIO GENERATION
+# SECTION 4: PIPER TTS AUDIO GENERATION (UPDATED)
 # =============================================================================
 
-def _piper_hf_urls(model_id: str):
-    """Gets the Hugging Face download URLs for a Piper model."""
-    try:
-        parts = model_id.split('-')
-        lang_code, speaker, quality = parts[0], parts[1], parts[2]
-        family = lang_code.split('_')[0]
-        base = f"https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/{family}/{lang_code}/{speaker}/{quality}/{model_id}"
-        return f"{base}.onnx", f"{base}.onnx.json"
-    except Exception:
-        return None, None
-
-def ensure_piper_voice(model_id: str, voices_dir: str):
-    """Downloads a Piper voice model and config if they don't exist."""
+def ensure_piper_voice_lib(model_id: str, voices_dir: str):
+    """
+    Downloads a Piper voice model using the installed library's
+    download command.
+    """
+    print(f"   - Ensuring voice: {model_id} in {voices_dir}")
     os.makedirs(voices_dir, exist_ok=True)
-    model_url, json_url = _piper_hf_urls(model_id)
-    if not model_url:
-        print(f"   - ❌ ERROR: Could not generate URLs for model '{model_id}'")
-        return None, None
-
+    
+    # Check if files already exist
     model_path = os.path.join(voices_dir, f"{model_id}.onnx")
     json_path = os.path.join(voices_dir, f"{model_id}.onnx.json")
-
-    def _download(url, path):
-        print(f"     - Checking for: {os.path.basename(path)}")
-        if os.path.exists(path):
-            print("     - ✅ Already exists.")
-            return True
-        print(f"     - Attempting download from: {url}")
-        try:
-            with requests.Session() as session:
-                r = session.get(url, stream=True, timeout=60)
-                r.raise_for_status()
-                with open(path, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=8192 * 10):
-                        if chunk: f.write(chunk)
-                print("     - ✅ Download complete.")
-                return True
-        except Exception as e:
-            print(f"     - ❌ Download failed: {e}")
-            return False
-
-    model_ok = _download(model_url, model_path)
-    json_ok = _download(json_url, json_path)
-
-    if model_ok and json_ok:
-        print(f"   - ✅ Successfully verified voice: {model_id}")
-        return model_path, json_path
-    else:
-        print(f"   - ❌ Failed to download/verify files for {model_id}.")
-        return None, None
-
-def generate_piper_tts_audio(model_path: str, text: str, output_wav_path: str, output_mp3_path: str):
-    """
-    Generates WAV and MP3 audio from text using a local Piper model
-    via the command-line interface.
-    """
-    print("   - Generating audio via Piper TTS...")
-    config_path = model_path + ".json"
-    sample_rate = 22050  # Default
+    
+    if os.path.exists(model_path) and os.path.exists(json_path):
+        print("   - ✅ Voice files already exist.")
+        return True
+        
+    print("   - Voice not found locally. Downloading...")
     try:
-        with open(config_path, 'r') as f:
-            config = json.load(f)
-            sample_rate = config.get('audio', {}).get('sample_rate', 22050)
-        print(f"   - Using sample rate: {sample_rate}")
+        # Use the library's built-in downloader
+        command = [
+            "python", "-m", "piper.download_voices",
+            model_id,
+            "--data-dir", voices_dir
+        ]
+        process = subprocess.run(
+            command, check=True, capture_output=True, text=True, timeout=120
+        )
+        print("   - ✅ Download successful.")
+        print(f"   - STDOUT: {process.stdout}")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"   - ❌ ERROR: Subprocess failed during voice download!")
+        print(f"     - Command: {' '.join(e.cmd)}")
+        print(f"     - Stderr: {e.stderr}")
+        return False
     except Exception as e:
-        print(f"   - ⚠️ Warning: Could not read sample rate: {e}. Defaulting to {sample_rate}.")
+        print(f"   - ❌ ERROR downloading voice: {e}")
+        return False
 
+def generate_piper_tts_audio_lib(
+    model_id: str, 
+    voices_dir: str, 
+    text: str, 
+    output_wav_path: str, 
+    output_mp3_path: str
+):
+    """
+    Generates WAV and MP3 audio from text using the installed
+    `piper-tts` library via `python -m piper`.
+    """
+    print("   - Generating audio via Piper TTS library...")
+    
     # Create a temporary directory for intermediate files
     TMP_AUDIO_DIR = "./tmp_audio"
     os.makedirs(TMP_AUDIO_DIR, exist_ok=True)
     tmp_wav = os.path.join(TMP_AUDIO_DIR, "temp_piper_out.wav")
-
-    # Clean, safe text for shell command
-    safe_text = text.replace("'", "'\\''")
-    safe_model_path = f'"{model_path}"' if ' ' in model_path else model_path
-    safe_tmp_wav = f'"{tmp_wav}"' if ' ' in tmp_wav else tmp_wav
 
     # Enthusiastic, randomized parameters
     length_scale = round(random.uniform(0.9, 1.0), 2)
@@ -399,26 +378,46 @@ def generate_piper_tts_audio(model_path: str, text: str, output_wav_path: str, o
     
     print(f"   - Params: len_scale={length_scale}, noise_scale={noise_scale}, noise_w={noise_w}")
 
-    command = (
-        f"echo '{safe_text}' | "
-        f"piper --model {safe_model_path} "
-        f"--length_scale {length_scale} "
-        f"--noise_scale {noise_scale} "
-        f"--noise_w {noise_w} "
-        f"--output_file {safe_tmp_wav}"
-    )
+    # Build the command
+    command = [
+        "python", "-m", "piper",
+        "--data-dir", voices_dir,
+        "--model", model_id,
+        "--output_file", tmp_wav,
+        "--length_scale", str(length_scale),
+        "--noise_scale", str(noise_scale),
+        "--noise_w", str(noise_w)
+    ]
 
     try:
         # 1. Generate Raw WAV using Piper
+        # We pipe the text to stdin
+        print(f"   - Running Piper for model: {model_id}...")
         process = subprocess.run(
-            command, shell=True, check=True, capture_output=True, timeout=90
+            command,
+            input=text,         # Pass text via stdin
+            text=True,          # Use text mode for input
+            check=True,
+            capture_output=True, # Capture stdout/stderr
+            timeout=90
         )
         print("   - Piper subprocess complete.")
         
         if not os.path.exists(tmp_wav) or os.path.getsize(tmp_wav) < 1024:
             raise RuntimeError("Piper failed: Output WAV file is missing or empty.")
 
-        # 2. Convert to final WAV (corrects sample rate if needed)
+        # 2. Get correct sample rate from config
+        sample_rate = 22050  # Default
+        config_path = os.path.join(voices_dir, f"{model_id}.onnx.json")
+        try:
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+                sample_rate = config.get('audio', {}).get('sample_rate', 22050)
+            print(f"   - Using sample rate: {sample_rate}")
+        except Exception as e:
+            print(f"   - ⚠️ Warning: Could not read sample rate: {e}. Defaulting to {sample_rate}.")
+
+        # 3. Convert to final WAV (corrects sample rate)
         print(f"   - Converting to final WAV: {os.path.basename(output_wav_path)}")
         subprocess.run(
             ["ffmpeg", "-y", "-v", "error", "-i", tmp_wav,
@@ -427,7 +426,7 @@ def generate_piper_tts_audio(model_path: str, text: str, output_wav_path: str, o
             check=True, timeout=60
         )
 
-        # 3. Convert to MP3
+        # 4. Convert to MP3
         print(f"   - Converting to MP3: {os.path.basename(output_mp3_path)}")
         subprocess.run(
             ["ffmpeg", "-y", "-v", "error", "-i", output_wav_path,
@@ -440,13 +439,16 @@ def generate_piper_tts_audio(model_path: str, text: str, output_wav_path: str, o
         print("   - ✅ Audio generation successful.")
 
     except subprocess.CalledProcessError as e:
-        stderr_output = e.stderr.decode(errors='ignore') if e.stderr else 'N/A'
+        stderr_output = e.stderr if e.stderr else 'N/A'
+        stdout_output = e.stdout if e.stdout else 'N/A'
         print(f"   - ❌ ERROR: Subprocess failed!")
-        print(f"     - Command: {e.cmd}")
+        print(f"     - Command: {' '.join(e.cmd)}")
+        print(f"     - Stdout: {stdout_output}")
         print(f"     - Stderr: {stderr_output}")
         raise
     except Exception as e:
         print(f"   - ❌ ERROR during TTS/conversion: {e}")
+        traceback.print_exc()
         raise
     finally:
         # Clean up temporary file
@@ -464,16 +466,15 @@ def main():
     GCP_SECRET_NAME = "GCP_SA_KEY"
     DRIVE_INPUT_FOLDER_ID = "1J2epmcfA8hT8YFk4Q7G9LM3qLZzw3W_H"
     DRIVE_OUTPUT_FOLDER_ID = "1EgSz_-mkxK-L0inIu0-_gJuES8267zfo"
-    SHEET_FILE_NAME = "offer_articles"  # The Google Sheet file
-    WORKSHEET_NAME = "offer_articles" # The specific tab/worksheet name
+    SHEET_FILE_NAME = "offer_articles"
+    WORKSHEET_NAME = "offer_articles"
     
-    LOCAL_VOICES_DIR = "./piper_voices"
+    LOCAL_VOICES_DIR = "./voices" # Use the same dir as the YAML test step
     LOCAL_OUTPUT_DIR = "./audio_outputs"
     
     PIPER_VOICE_HI = "hi_IN-priyamvada-medium"
-    PIPER_VOICE_TE = "te_IN-sushma-medium" # Telugu voice model
+    PIPER_VOICE_TE = "te_IN-sushma-medium"
     
-    # Store codes for Hindi voice
     HINDI_STORE_CODES = {
         4702, 4703, 4706, 4712, 4713, 4716, 4717, 4719, 4720, 
         4723, 4724, 4727, 4729, 4744, 4760, 4797, 4801, 4803
@@ -494,13 +495,21 @@ def main():
         os.makedirs(LOCAL_OUTPUT_DIR, exist_ok=True)
         os.makedirs("./tmp_audio", exist_ok=True) # For ffmpeg intermediates
         
-        # --- 3. Ensure TTS Models are Downloaded ---
+        # --- 3. Ensure TTS Models are Downloaded (using new library method) ---
         print("\n--- Ensuring TTS Voice Models ---")
-        hindi_model_path, _ = ensure_piper_voice(PIPER_VOICE_HI, LOCAL_VOICES_DIR)
-        telugu_model_path, _ = ensure_piper_voice(PIPER_VOICE_TE, LOCAL_VOICES_DIR)
-
-        if not (hindi_model_path and telugu_model_path):
-            raise RuntimeError("Failed to download one or more Piper TTS models. Aborting.")
+        
+        hindi_model_ok = ensure_piper_voice_lib(PIPER_VOICE_HI, LOCAL_VOICES_DIR)
+        if not hindi_model_ok:
+            print(f"   - ⚠️ WARNING: Failed to download Hindi voice model {PIPER_VOICE_HI}.")
+            # We don't exit, as some stores might be Telugu-only
+        
+        telugu_model_ok = ensure_piper_voice_lib(PIPER_VOICE_TE, LOCAL_VOICES_DIR)
+        if not telugu_model_ok:
+            print(f"   - ⚠️ WARNING: Failed to download Telugu voice model {PIPER_VOICE_TE}.")
+            # We don't exit, as some stores might be Hindi-only
+            
+        if not (hindi_model_ok or telugu_model_ok):
+            raise RuntimeError("Failed to download *any* TTS models. Aborting.")
             
         # --- 4. Get Sheet Data ---
         print("\n--- Fetching Google Sheet Data ---")
@@ -525,11 +534,17 @@ def main():
 
                 if store_code in HINDI_STORE_CODES:
                     lang_code = 'hi'
-                    model_path = hindi_model_path
+                    model_id = PIPER_VOICE_HI
+                    if not hindi_model_ok:
+                        print(f"   - ❌ SKIPPING: Hindi model was not downloaded successfully.")
+                        continue
                     print(f"   - Store Code {store_code} found in Hindi list. Language: Hindi")
                 else:
                     lang_code = 'te'
-                    model_path = telugu_model_path
+                    model_id = PIPER_VOICE_TE
+                    if not telugu_model_ok:
+                        print(f"   - ❌ SKIPPING: Telugu model was not downloaded successfully.")
+                        continue
                     print(f"   - Store Code {store_code} not in Hindi list. Language: Telugu")
 
                 # --- 5b. Generate Text ---
@@ -543,7 +558,6 @@ def main():
                 print(f"   - Generated Text: {text_to_speak[:75]}...")
 
                 # --- 5c. Prepare Local Paths ---
-                # Sanitize names for file systems
                 safe_store_name = re.sub(r'[^\w\s-]', '', store_name).strip().replace(' ', '_')
                 safe_article_name = re.sub(r'[^\w\s-]', '', article_name).strip().replace(' ', '_')[:100]
                 if not safe_article_name: safe_article_name = f"product_{index}"
@@ -556,8 +570,9 @@ def main():
 
                 # --- 5d. Generate Audio (with gTTS Fallback) ---
                 try:
-                    generate_piper_tts_audio(
-                        model_path, text_to_speak, output_wav, output_mp3
+                    # Use the new library-based function
+                    generate_piper_tts_audio_lib(
+                        model_id, LOCAL_VOICES_DIR, text_to_speak, output_wav, output_mp3
                     )
                 except Exception as e_piper:
                     print(f"   - ⚠️ Piper TTS failed: {e_piper}")
@@ -566,7 +581,6 @@ def main():
                         tts_fallback = gTTS(text=text_to_speak, lang=lang_code, slow=False)
                         tts_fallback.save(output_mp3)
                         print("   - ✅ gTTS fallback (MP3) successful.")
-                        # Create a dummy WAV file if gTTS succeeds? No, just upload the MP3.
                         if os.path.exists(output_wav): 
                             os.remove(output_wav) # Remove partial/failed Piper WAV
                     except Exception as e_gtts:
@@ -583,7 +597,6 @@ def main():
                     print(f"   - ❌ Skipping upload, could not create/find Drive folder for '{safe_store_name}'")
                     continue
                 
-                # Upload whatever files were successfully created
                 if os.path.exists(output_mp3):
                     upload_file_to_drive(drive_service, drive_store_folder_id, output_mp3)
                 if os.path.exists(output_wav):
@@ -617,7 +630,8 @@ def main():
             except Exception as e:
                 print(f"   - ⚠️ Warn: Cleanup failed for {path}: {e}")
 
-        safe_rmtree(LOCAL_VOICES_DIR)
+        # We keep ./voices, as it's the cache
+        # safe_rmtree(LOCAL_VOICES_DIR) 
         safe_rmtree(LOCAL_OUTPUT_DIR)
         safe_rmtree("./tmp_audio")
         if local_creds_path:
