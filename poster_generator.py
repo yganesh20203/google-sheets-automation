@@ -932,9 +932,9 @@ def create_price_update_sheet(store_products_df, theme, font_folder, output_path
             'font_offer_label': font_offer_label,
             'font_big_savings': font_big_savings,
             'font_b1g1_badge': font_b1g1_badge,
-            'badge_color': "#FFC300",
+            'badge_color': "#FFFFFF",
             'badge_text_color': "#000000",
-            'price_box_color': "#FFC300",
+            'price_box_color': "#FFFFFF",
             'price_box_text_color': "#000000"
         }
 
