@@ -100,8 +100,13 @@ def export_df_to_gsheet(spreadsheet, df_to_export, sheet_name):
         # Reset index if it's not a simple range, (e.g., for pivot tables)
         if not isinstance(df_to_export.index, pd.RangeIndex):
             df_to_export = df_to_export.reset_index()
-    df_to_export.replace([np.inf, -np.inf], np.nan, inplace=True)
-    df_to_export.fillna("", inplace=True)
+        
+        # --- FIX: These lines are now correctly indented ---
+        # Replace Infinity/-Infinity with NaN, as fillna() only works on NaN
+        df_to_export.replace([np.inf, -np.inf], np.nan, inplace=True)
+        # Replace all NaN values with an empty string. JSON can handle this.
+        df_to_export.fillna("", inplace=True)
+        # --- END FIX ---
 
         export_data = [df_to_export.columns.values.tolist()] + df_to_export.values.tolist()
 
@@ -119,7 +124,7 @@ def export_df_to_gsheet(spreadsheet, df_to_export, sheet_name):
         print(f"✅ Successfully exported to worksheet: '{sheet_name}'")
         
         # Return the worksheet object so the caller can update the timestamp
-        return worksheet 
+        return worksheet  
 
     except Exception as e:
         print(f"\n❌ An error occurred during the export to '{sheet_name}': {e}")
@@ -182,10 +187,10 @@ def process_and_upload_pivot_report(df_original, cat_df, sheets_service, drive_s
         print("Creating pivot table...")
         pivot_report_df = df_filtered.pivot_table(
             index=['report_date', 'Store Code1', 'Mode of Fullfillment'], # Rows
-            columns=['grouping'],                                        # Columns
-            values='Item Gross Weight',                                  # Values
-            aggfunc='sum',                                               # Aggregation
-            fill_value=0                                                 # Fill missing with 0
+            columns=['grouping'],                                           # Columns
+            values='Item Gross Weight',                                     # Values
+            aggfunc='sum',                                                  # Aggregation
+            fill_value=0                                                    # Fill missing with 0
         )
         
         # MODIFIED: CONVERT KG TO TON
@@ -212,7 +217,7 @@ def process_and_upload_pivot_report(df_original, cat_df, sheets_service, drive_s
     # Prepare the new data
     new_data_df = pivot_report_df.reset_index()
 
-    worksheet = None 
+    worksheet = None  
     
     try:
         spreadsheet = sheets_service.open_by_url(GSHEET_URL)
@@ -331,7 +336,7 @@ def process_and_upload_sheet3_reports(df_original, sheets_service, drive_service
     # --- 4. Export to Google Sheets (with maturation logic) ---
     print("--- Reading, Combining, and Exporting Report to Sheet3 ---")
     target_sheet_name = 'Sheet3'
-    worksheet = None 
+    worksheet = None  
 
     try:
         spreadsheet = sheets_service.open_by_url(GSHEET_URL)
