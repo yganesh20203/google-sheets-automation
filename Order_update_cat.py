@@ -100,6 +100,8 @@ def export_df_to_gsheet(spreadsheet, df_to_export, sheet_name):
         # Reset index if it's not a simple range, (e.g., for pivot tables)
         if not isinstance(df_to_export.index, pd.RangeIndex):
             df_to_export = df_to_export.reset_index()
+    df_to_export.replace([np.inf, -np.inf], np.nan, inplace=True)
+    df_to_export.fillna("", inplace=True)
 
         export_data = [df_to_export.columns.values.tolist()] + df_to_export.values.tolist()
 
