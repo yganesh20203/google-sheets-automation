@@ -1200,7 +1200,7 @@ def main():
 
         full_original_discount_str = merged_offers_df['discount %'].astype(str).str.lower()
         perserve_full_original_discount = full_original_discount_str.str.contains('b1g1') | \
-                                        full_orginal_discount_str.str.contains('upto') | \
+                                        full_original_discount_str.str.contains('upto') | \
                                         full_original_discount_str.str.contains('flash sale')
         
         merged_offers_df['current mrp'] = np.where(
