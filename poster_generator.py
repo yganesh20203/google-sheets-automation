@@ -1155,10 +1155,10 @@ def main():
         discount_percentage_whole = np.round(discount_decimal * 100).astype(int)
         
         original_discount_str = mismatched_rows_df['discount%'].astype(str).str.lower()
-        
-        preserve_original_discount = original_discount_str.str.contains('b1g1') | \
-                                     original_discount_str.str.contains('upto') | \
-                                     original_discount_str.str.contains('flash sale')
+        preserve_original_discount = original_discount_str.str.contains('b1g1') | \
+                                    original_discount_str.str.contains('upto') | \
+                                    original_discount_str.str.contains('flash sale')
+
 
         mismatched_rows_df['discount %'] = np.where(
             preserve_original_discount,
