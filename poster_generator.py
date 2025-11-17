@@ -1202,18 +1202,19 @@ def main():
         perserve_full_original_discount = full_original_discount_str.str.contains('b1g1') | \
                                         full_orginal_discount_str.str.contains('upto') | \
                                         full_original_discount_str.str.contains('flash sale')
-
-        merged_offers_df['current mrp'] = np.where(
-            merged_offers_df['check_flag'] == False,
-            merged_offers_df['Raw_mrp'],
-            merged_offers_df['current mrp']
-        )
-        merged_offers_df['selling price'] = np.where(
-            merged_offers_df['check_flag'] == False,
-            merged_offers_df['Raw_SELLING_PRICE'],
-            merged_offers_df['selling price']
-        )
-        
+        
+        merged_offers_df['current mrp'] = np.where(
+            merged_offers_df['check_flag'] == False,
+            merged_offers_df['Raw_mrp'],
+            merged_offers_df['current mrp']
+        )
+        merged_offers_df['selling price'] = np.where(
+            merged_offers_df['check_flag'] == False,
+            merged_offers_df['Raw_SELLING_PRICE'],
+            merged_offers_df['selling price'],
+        )
+            
+               
         merged_offers_df['discount %'] = np.where(
             # Condition: If it's NOT a mismatched row OR it IS a special string, keep the original value
             (merged_offers_df['check_flag'] == True) | (preserve_full_original_discount),
