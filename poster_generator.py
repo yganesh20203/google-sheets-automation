@@ -1213,8 +1213,8 @@ def main():
             merged_offers_df['Raw_SELLING_PRICE'],
             merged_offers_df['selling price'],
         )
-            
-        merged_offers_df['discount %'] = np.where(
+        merged_offers_df['discount %'] = np.where(    
+
             (merged_offers_df['check_flag'] == True) | (preserve_full_original_discount),
             merged_offers_df['discount %'],
             merged_offers_df['new_discount_pct']
