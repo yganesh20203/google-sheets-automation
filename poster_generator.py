@@ -1161,7 +1161,7 @@ def main():
 
         mismatched_rows_df['discount %'] = np.where(
             preserve_original_discount,
-            mismatched_rows_df['discount%'],
+            mismatched_rows_df['discount %'],
             discount_percentage_whole
         )
 
