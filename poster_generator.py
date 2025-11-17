@@ -1222,7 +1222,7 @@ def main():
 
         merged_offers_df['selling price'] = np.where(
             merged_offers_df['check_flag'] == False,
-            merged_offers_df['RAW_SELLING_PRICE'],
+            merged_offers_df['Raw_SELLING_PRICE'],
             merged_offers_df['selling price']
         )
 
