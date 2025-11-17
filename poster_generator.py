@@ -1154,13 +1154,17 @@ def main():
         )
         discount_percentage_whole = np.round(discount_decimal * 100).astype(int)
         
-        original_discount_is_numeric = pd.to_numeric(mismatched_rows_df['discount %'], errors='coerce').notna()
+        
+        original_discount_str = mismatched_rows_df['discount %'].astype(str).str.lower()
+        preserve_original_discount = original_discount_str.str.contains('b1g1') | \
+                                     original_discount_str.str.contains('upto') | \
+                                     original_discount_str.str.contains('flash sale')
 
-        mismatched_rows_df['discount %'] = np.where(
-            original_discount_is_numeric,
-            discount_percentage_whole,
-            mismatched_rows_df['discount %']
-        )
+        mismatched_rows_df['discount %'] = np.where(
+            preserve_original_discount,
+            mismatched_rows_df['discount %'], # Keep original (e.g., 'B1G1')
+            discount_percentage_whole       # Use new calculated percentage
+        )
         
         mismatched_rows_df['current mrp'] = mismatched_rows_df['Raw_mrp']
         mismatched_rows_df['selling price'] = mismatched_rows_df['Raw_SELLING_PRICE']
@@ -1193,13 +1197,29 @@ def main():
         full_discount_percentage_whole = np.round(full_discount_decimal * 100).astype(int)
         
         merged_offers_df['new_discount_pct'] = full_discount_percentage_whole
-        full_original_discount_is_numeric = pd.to_numeric(merged_offers_df['discount %'], errors='coerce').notna()
-        
-        merged_offers_df['current mrp'] = np.where(
-            merged_offers_df['check_flag'] == False,
-            merged_offers_df['Raw_mrp'],
-            merged_offers_df['current mrp']
-        )
+
+        full_original_discount_str = merged_offers_df['discount %'].astype(str).str.lower()
+        preserve_full_original_discount = full_original_discount_str.str.contains('b1g1') | \
+                                          full_original_discount_str.str.contains('upto') | \
+                                          full_original_discount_str.str.contains('flash sale')
+        
+        merged_offers_df['current mrp'] = np.where(
+            merged_offers_df['check_flag'] == False,
+            merged_offers_df['Raw_mrp'],
+            merged_offers_df['current mrp']
+        )
+        merged_offers_df['selling price'] = np.where(
+            merged_offers_df['check_flag'] == False,
+            merged_offers_df['Raw_SELLING_PRICE'],
+            merged_offers_df['selling price']
+        )
+        
+        merged_offers_df['discount %'] = np.where(
+            # Condition: If it's NOT a mismatched row OR it IS a special string, keep the original value
+            (merged_offers_df['check_flag'] == True) | (preserve_full_original_discount),
+            merged_offers_df['discount %'],
+            merged_offers_df['new_discount_pct'] # Otherwise (it's mismatched AND not special), use new pct
+        )
         merged_offers_df['selling price'] = np.where(
             merged_offers_df['check_flag'] == False,
             merged_offers_df['Raw_SELLING_PRICE'],
