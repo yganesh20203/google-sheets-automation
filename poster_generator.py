@@ -1198,10 +1198,11 @@ def main():
         
         merged_offers_df['new_discount_pct'] = full_discount_percentage_whole
 
-        full_original_discount_str = merged_offers_df['discount %'].astype(str).str.lower()
-        preserve_full_original_discount = full_original_discount_str.str.contains('b1g1') | \
-                                          full_original_discount_str.str.contains('upto') | \
-                                          full_original_discount_str.str.contains('flash sale')
+        full_original_discount_str = merged_offers_df['discount%'].astype(str).str.lower()
+        perserve_full_original_discount = full_original_discount_str.str.contains('b1g1') | \
+                                        full_orginal_discount_str.str.contains('upto') | \
+                                        full_original_discount_str.str.contains('flash sale')
+
         
         merged_offers_df['current mrp'] = np.where(
             merged_offers_df['check_flag'] == False,
