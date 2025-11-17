@@ -1220,17 +1220,7 @@ def main():
             merged_offers_df['new_discount_pct']
         )
 
-        merged_offers_df['selling price'] = np.where(
-            merged_offers_df['check_flag'] == False,
-            merged_offers_df['Raw_SELLING_PRICE'],
-            merged_offers_df['selling price']
-        )
-
-        merged_offers_df['discount %'] = np.where(
-            (merged_offers_df['check_flag'] == False) & (full_original_discount_is_numeric),
-            merged_offers_df['new_discount_pct'],
-            merged_offers_df['discount %']
-        )
+        
 
 
         final_csv_df = merged_offers_df[original_csv_columns]
