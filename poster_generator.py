@@ -1154,7 +1154,7 @@ def main():
         )
         discount_percentage_whole = np.round(discount_decimal * 100).astype(int)
         
-        original_discount_str = mismatched_rows_df['discount%'].astype(str).str.lower()
+        original_discount_str = mismatched_rows_df['discount %'].astype(str).str.lower()
         preserve_original_discount = original_discount_str.str.contains('b1g1') | \
                                     original_discount_str.str.contains('upto') | \
                                     original_discount_str.str.contains('flash sale')
@@ -1198,7 +1198,7 @@ def main():
         
         merged_offers_df['new_discount_pct'] = full_discount_percentage_whole
 
-        full_original_discount_str = merged_offers_df['discount%'].astype(str).str.lower()
+        full_original_discount_str = merged_offers_df['discount %'].astype(str).str.lower()
         perserve_full_original_discount = full_original_discount_str.str.contains('b1g1') | \
                                         full_orginal_discount_str.str.contains('upto') | \
                                         full_original_discount_str.str.contains('flash sale')
