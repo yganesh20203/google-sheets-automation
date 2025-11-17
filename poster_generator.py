@@ -1203,7 +1203,6 @@ def main():
                                         full_orginal_discount_str.str.contains('upto') | \
                                         full_original_discount_str.str.contains('flash sale')
 
-        
         merged_offers_df['current mrp'] = np.where(
             merged_offers_df['check_flag'] == False,
             merged_offers_df['Raw_mrp'],
