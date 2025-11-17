@@ -1214,24 +1214,25 @@ def main():
             merged_offers_df['selling price'],
         )
             
-               
-        merged_offers_df['discount %'] = np.where(
-            # Condition: If it's NOT a mismatched row OR it IS a special string, keep the original value
-            (merged_offers_df['check_flag'] == True) | (preserve_full_original_discount),
-            merged_offers_df['discount %'],
-            merged_offers_df['new_discount_pct'] # Otherwise (it's mismatched AND not special), use new pct
-        )
+        merged_offers_df['discount %'] = np.where(
+            (merged_offers_df['check_flag'] == True) | (preserve_full_original_discount),
+            merged_offers_df['discount %'],
+            merged_offers_df['new_discount_pct']
+        )
+
         merged_offers_df['selling price'] = np.where(
             merged_offers_df['check_flag'] == False,
-            merged_offers_df['Raw_SELLING_PRICE'],
+            merged_offers_df['RAW_SELLING_PRICE'],
             merged_offers_df['selling price']
         )
+
         merged_offers_df['discount %'] = np.where(
             (merged_offers_df['check_flag'] == False) & (full_original_discount_is_numeric),
             merged_offers_df['new_discount_pct'],
             merged_offers_df['discount %']
         )
-        
+
+
         final_csv_df = merged_offers_df[original_csv_columns]
         
         final_csv_df.to_csv(offer_articles_csv_path, index=False)
