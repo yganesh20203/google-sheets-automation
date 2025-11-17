@@ -1159,7 +1159,7 @@ def main():
                                     original_discount_str.str.contains('upto') | \
                                     original_discount_str.str.contains('flash sale')
 
-        mismatched_rows_df['discount %']  np.where(
+        mismatched_rows_df['discount %'] = np.where(
             preserve_original_discount,
             mismatched_rows_df['dicount%'],
             discount_percentage_whole
