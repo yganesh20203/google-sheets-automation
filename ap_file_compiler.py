@@ -17,7 +17,7 @@ from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 # --- 1. USER CONFIGURATION ---
 
 # The ID of the top-level folder containing the daily dated folders (e.g., "15th October...")
-DRIVE_PARENT_FOLDER_ID = '1mBCJJ_7kTSMlNDj7mMxZ33hNeMykqKyR'
+DRIVE_PARENT_FOLDER_ID = '1tSntTJIM4HMobZw2XYdCSy0unRkafh4N'
 
 # **NEW**: Create a folder in Google Drive for the output reports and paste its ID here.
 # Make sure your service account has "Editor" access to this folder.
