@@ -1,4 +1,15 @@
 # 1. SETUP: Add all libraries to your requirements.txt file.
+# requirements.txt should contain:
+# Pillow
+# requests
+# pandas
+# numpy
+# openpyxl
+# google-auth
+# google-auth-oauthlib
+# google-auth-httplib2
+# google-api-python-client
+# gspread
 
 # 2. Import all necessary libraries
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageOps
@@ -9,7 +20,8 @@ import pandas as pd
 import math
 from datetime import datetime
 import numpy as np
-import json 
+import json
+import time
 
 # Google Drive Imports
 from google.oauth2 import service_account
@@ -20,7 +32,7 @@ from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 import openpyxl
 from openpyxl.utils.dataframe import dataframe_to_rows
 
-# <--- NEW: Import gspread for Google Sheets
+# Import gspread for Google Sheets
 import gspread
 
 # Suppress security warnings for unverified HTTPS requests
@@ -30,8 +42,6 @@ requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 # ==============================================================================
 # 3. COMMON HELPER FUNCTIONS (for Pillow)
 # ==============================================================================
-
-# ... (all helper functions: remove_white_background, wrap_text, create_shadow, etc. remain unchanged) ...
 
 # Function to remove white background
 def remove_white_background(image, tolerance=20):
@@ -92,7 +102,7 @@ def draw_rounded_rectangle_with_shadow(draw, xy, radius, fill, shadow_color="#00
     shadow_img = shadow_img.filter(ImageFilter.GaussianBlur(blur_radius))
     draw.bitmap((int(x1+shadow_offset[0]-blur_radius), int(y1+shadow_offset[1]-blur_radius)), shadow_img, fill=None)
     draw.rounded_rectangle(xy, radius=radius, fill=fill)
-    
+
 # Helper function to explicitly clean the selling price column
 def clean_price(price_val):
     try:
@@ -111,7 +121,6 @@ def draw_halftone_pattern(draw, width, height, color, step=30, dot_size=3):
 # 4. GOOGLE DRIVE & SHEETS HELPER FUNCTIONS
 # ==============================================================================
 
-# <--- NEW: Added Google Sheets scope
 SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
 
 def authenticate_service_account():
@@ -125,15 +134,12 @@ def authenticate_service_account():
         
         creds_info = json.loads(creds_json_string)
         
-        # <--- NEW: Use the creds_info to build the credentials object
         creds = service_account.Credentials.from_service_account_info(
             creds_info, scopes=SCOPES)
         
-        # Build Drive service
         drive_service = build('drive', 'v3', credentials=creds)
         print("✅ Google Drive authentication successful.")
         
-        # <--- NEW: Return both the Drive service and the credentials object (for gspread)
         return drive_service, creds 
         
     except json.JSONDecodeError:
@@ -142,8 +148,6 @@ def authenticate_service_account():
     except Exception as e:
         print(f"❌ Error authenticating with Google APIs: {e}")
         return None, None
-
-# ... (clear_drive_folder, find_or_create_folder, upload_file_to_drive, get_file_id_from_folder, download_file_from_drive, update_file_in_drive functions remain unchanged) ...
 
 def clear_drive_folder(service, folder_id):
     """Deletes all files and folders within a specific Google Drive folder."""
@@ -234,7 +238,6 @@ def download_file_from_drive(service, file_id, local_path):
         done = False
         while done is False:
             status, done = downloader.next_chunk()
-            print(f"   -> Downloading {local_path}: {int(status.progress() * 100)}%.")
         print(f"✅ Download complete: {local_path}")
     except Exception as e:
         print(f"❌ Error downloading file (ID: {file_id}) to '{local_path}': {e}")
@@ -253,24 +256,18 @@ def update_file_in_drive(service, local_file_path, file_id, mime_type):
     except Exception as e:
         print(f"❌ Error updating file '{os.path.basename(local_file_path)}' in Drive: {e}")
 
-# <--- NEW: Function to update the Google Sheet log
 def update_poster_counts_sheet(creds, counts_dict, sheet_id):
     """Logs the poster counts per store to a Google Sheet."""
     print("\n--- Updating Poster Count Log Sheet ---")
     try:
-        # Authorize gspread with the credentials
         gc = gspread.authorize(creds)
-        
-        # Open the Google Sheet by its ID
         sh = gc.open_by_key(sheet_id)
-        worksheet = sh.worksheet('Sheet1') # Assumes the sheet name is 'Sheet1'
+        worksheet = sh.worksheet('Sheet1')
         
-        # Format the data for writing
         data_to_write = [['Store Name', 'No. of posters']]
         for store, count in counts_dict.items():
             data_to_write.append([store, count])
         
-        # Clear the sheet and update it with the new data
         worksheet.clear()
         worksheet.update('A1', data_to_write)
         
@@ -283,7 +280,6 @@ def update_poster_counts_sheet(creds, counts_dict, sheet_id):
 # 5. POSTER FUNCTION 1 (DEFAULT - Orange Theme)
 # ==============================================================================
 
-# ... (create_poster_default function remains unchanged) ...
 def create_poster_default(image_path, product_name, price, selling_price, discount_percent, logo_path, company_name, location, output_path, log_file_path):
     # --- Poster Configuration ---
     DPI = 300
@@ -312,7 +308,6 @@ def create_poster_default(image_path, product_name, price, selling_price, discou
 
     # --- Load Fonts ---
     try:
-        # Assumes fonts are in the same directory as the logo_path
         font_folder = os.path.dirname(logo_path) 
         oswald_bold_path = os.path.join(font_folder, "Oswald-Bold.ttf")
         lato_black_path = os.path.join(font_folder, "Lato-Black.ttf")
@@ -337,7 +332,7 @@ def create_poster_default(image_path, product_name, price, selling_price, discou
     swoosh_start_x = WIDTH // 2 - 200
     draw.ellipse([swoosh_start_x - WIDTH, HEADER_HEIGHT, swoosh_start_x + WIDTH, HEIGHT * 2], fill=SWOOSH_COLOR)
 
-    # --- Image Placement with Correct Scaling ---
+    # --- Image Placement ---
     try:
         if isinstance(image_path, str) and image_path.startswith('http'):
             response = requests.get(image_path, verify=False)
@@ -348,7 +343,6 @@ def create_poster_default(image_path, product_name, price, selling_price, discou
         
         product_image = remove_white_background(product_image.convert("RGBA"))
         
-        # --- ROBUST IMAGE SIZING LOGIC ---
         max_img_w_area = int(swoosh_start_x * 0.9)
         max_img_h_area = HEIGHT - HEADER_HEIGHT - PADDING * 2
         
@@ -356,7 +350,6 @@ def create_poster_default(image_path, product_name, price, selling_price, discou
         product_container_size = int(circle_diameter * 1.1)
 
         if product_image.width > product_container_size or product_image.height > product_container_size:
-            print(f"-> Shrinking large image...")
             product_image.thumbnail((product_container_size, product_container_size), Image.Resampling.LANCZOS)
         else:
             aspect_ratio = product_image.width / product_image.height
@@ -366,7 +359,6 @@ def create_poster_default(image_path, product_name, price, selling_price, discou
             else: # Tall or square image
                 new_height = product_container_size
                 new_width = int(new_height * aspect_ratio)
-            print(f"-> Enlarging small image from {product_image.size} to ({new_width}, {new_height})")
             product_image = product_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
         composite_canvas = Image.new('RGBA', (product_container_size, product_container_size), (0,0,0,0))
@@ -388,9 +380,9 @@ def create_poster_default(image_path, product_name, price, selling_price, discou
         
         border_thickness = 20
         draw.ellipse((img_x - border_thickness, img_y - border_thickness, 
-                       img_x + final_product_image.width + border_thickness, 
-                       img_y + final_product_image.height + border_thickness), 
-                       fill=BACKGROUND_COLOR)
+                        img_x + final_product_image.width + border_thickness, 
+                        img_y + final_product_image.height + border_thickness), 
+                        fill=BACKGROUND_COLOR)
         
         poster.paste(final_product_image_with_shadow, (img_x, img_y), final_product_image_with_shadow)
         image_area_right_boundary = img_x + final_product_image_with_shadow.width
@@ -409,7 +401,6 @@ def create_poster_default(image_path, product_name, price, selling_price, discou
 
     is_upto_offer = isinstance(selling_price, str) and 'upto' in str(selling_price).lower()
     is_b1g1_offer = isinstance(discount_percent, str) and 'b1g1' in str(discount_percent).lower()
-    is_flash_sale_price = isinstance(selling_price, str) and 'flash sale' in str(selling_price).lower()
     is_numeric_price = isinstance(selling_price, (int, float))
 
     if not is_upto_offer:
@@ -514,7 +505,6 @@ def create_poster_default(image_path, product_name, price, selling_price, discou
 # 6. POSTER FUNCTION 2 (SPECIAL STORES - Muted/Red Theme)
 # ==============================================================================
 
-# ... (create_poster_special_stores function remains unchanged) ...
 def create_poster_special_stores(image_path, product_name, price, selling_price, discount_percent, logo_path, company_name, location, output_path, log_file_path):
     # --- Poster Configuration ---
     DPI = 300
@@ -528,9 +518,9 @@ def create_poster_special_stores(image_path, product_name, price, selling_price,
     SWOOSH_COLOR = "#E0F7FA"     
     PRICE_BOX_COLOR = "#fa9b0c"  
     NAME_BOX_COLOR = "#E0F7FA"   
-    TEXT_COLOR = "#000000"       
-    BORDER_COLOR = "#1C4E80"     
-    WHITE_COLOR = "#FFFFFF"      
+    TEXT_COLOR = "#000000"        
+    BORDER_COLOR = "#1C4E80"      
+    WHITE_COLOR = "#FFFFFF"       
     FOOTER_BG_COLOR = "#FFFFFF"
     DESIGN_ACCENT_COLOR = (224, 247, 250, 150)
     BORDER_WIDTH = 30
@@ -579,7 +569,7 @@ def create_poster_special_stores(image_path, product_name, price, selling_price,
     swoosh_start_x = WIDTH // 2 - 200
     draw.ellipse([swoosh_start_x - WIDTH, HEADER_HEIGHT, swoosh_start_x + WIDTH, HEIGHT * 2], fill=SWOOSH_COLOR)
 
-    # --- Image Placement with Correct Scaling ---
+    # --- Image Placement ---
     try:
         if isinstance(image_path, str) and image_path.startswith('http'):
             response = requests.get(image_path, verify=False)
@@ -597,7 +587,6 @@ def create_poster_special_stores(image_path, product_name, price, selling_price,
         product_container_size = int(circle_diameter * 1.1)
 
         if product_image.width > product_container_size or product_image.height > product_container_size:
-            print(f"-> Shrinking large image...")
             product_image.thumbnail((product_container_size, product_container_size), Image.Resampling.LANCZOS)
         else:
             aspect_ratio = product_image.width / product_image.height
@@ -607,7 +596,6 @@ def create_poster_special_stores(image_path, product_name, price, selling_price,
             else:
                 new_height = product_container_size
                 new_width = int(new_height * aspect_ratio)
-            print(f"-> Enlarging small image from {product_image.size} to ({new_width}, {new_height})")
             product_image = product_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
         composite_canvas = Image.new('RGBA', (product_container_size, product_container_size), (0,0,0,0))
@@ -629,9 +617,9 @@ def create_poster_special_stores(image_path, product_name, price, selling_price,
         
         border_thickness = 20
         draw.ellipse((img_x - border_thickness, img_y - border_thickness, 
-                       img_x + final_product_image.width + border_thickness, 
-                       img_y + final_product_image.height + border_thickness), 
-                       fill=BACKGROUND_COLOR)
+                        img_x + final_product_image.width + border_thickness, 
+                        img_y + final_product_image.height + border_thickness), 
+                        fill=BACKGROUND_COLOR)
         
         poster.paste(final_product_image_with_shadow, (img_x, img_y), final_product_image_with_shadow)
         image_area_right_boundary = img_x + final_product_image_with_shadow.width
@@ -757,11 +745,7 @@ def create_poster_special_stores(image_path, product_name, price, selling_price,
 
 
 # ==============================================================================
-# 7. <--- NEW: POSTER HELPER FUNCTIONS (FOR PATCHES) ---
-# ==============================================================================
-
-# ==============================================================================
-# 7. <--- NEW: POSTER HELPER FUNCTIONS (FOR PATCHES) ---
+# 7. POSTER HELPER FUNCTIONS (FOR PATCHES)
 # ==============================================================================
 
 def get_discount_badge_image(discount_percent, theme_config):
@@ -1002,17 +986,63 @@ def create_price_update_sheet(store_products_df, theme, font_folder, output_path
             continue
 
     sheet.save(output_path)
+
+
+# ==============================================================================
+# 8. MAIN SCRIPT EXECUTION
+# ==============================================================================
+
+def main():
+    try:
+        # --- PATH CONFIGURATION ---
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        output_folder_path = os.path.join(script_dir, 'output')
+        os.makedirs(output_folder_path, exist_ok=True)
+        print(f"Using local output/temp folder: {output_folder_path}")
+        
+        # --- GOOGLE DRIVE CONFIGURATION ---
+        DATA_FOLDER_ID = '1J2epmcfA8hT8YFk4Q7G9LM3qLZzw3W_H'
+        PARENT_DRIVE_FOLDER_ID = os.environ.get('PARENT_DRIVE_FOLDER_ID')
+        if not PARENT_DRIVE_FOLDER_ID:
+            print("❌ CRITICAL ERROR: 'PARENT_DRIVE_FOLDER_ID' environment variable not set.")
+            return
+            
+        FILE_CONFIG = {
+            'poster_raw_data.xlsx': {'id': None, 'mime': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'},
+            'offer_articles.csv': {'id': None, 'mime': 'text/csv'},
+            'check_offer.xlsx': {'id': None, 'mime': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'},
+            'product_images_1.xlsx': {'id': None, 'mime': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'},
+            'logo_1.png': {'id': None, 'mime': 'image/png'},
+            'Oswald-Bold.ttf': {'id': None, 'mime': 'font/ttf'},
+            'Lato-Black.ttf': {'id': None, 'mime': 'font/ttf'},
+        }
+
+        # --- Local File Paths ---
+        poster_raw_data_path = os.path.join(output_folder_path, 'poster_raw_data.xlsx')
+        offer_articles_csv_path = os.path.join(output_folder_path, 'offer_articles.csv')
+        check_offer_excel_path = os.path.join(output_folder_path, 'check_offer.xlsx')
+        product_images_path = os.path.join(output_folder_path, 'product_images_1.xlsx')
+        logo_path = os.path.join(output_folder_path, 'logo_1.png')
+        
+        log_file_path = os.path.join(output_folder_path, 'failed_images.log')
+        audit_log_path = os.path.join(output_folder_path, 'price_comparison_audit_log.xlsx')
+        
+        special_store_list = [
+            'Flipkart Wholesale Amritsar', 
+            'Flipkart Wholesale Jammu', 
+            'Flipkart Wholesale Vizag'
+        ]
+
         # ======================================================
         # --- 0. AUTHENTICATE AND DOWNLOAD INPUT FILES ---
         # ======================================================
         print("\n--- Starting Google Drive Authentication & Download ---")
         
-        # <--- NEW: Get both Drive service and gspread credentials
         drive_service, gsheet_creds = authenticate_service_account()
         
         if not drive_service or not gsheet_creds:
             print("❌ Halting script due to Google API authentication failure.")
-            exit()
+            return
 
         print(f"Downloading all input files from Drive Folder ID: {DATA_FOLDER_ID}...")
         for file_name in FILE_CONFIG.keys():
@@ -1024,7 +1054,7 @@ def create_price_update_sheet(store_products_df, theme, font_folder, output_path
                 download_file_from_drive(drive_service, file_id, local_path)
             else:
                 print(f"❌ CRITICAL ERROR: File '{file_name}' not found in Google Drive folder.")
-                exit()
+                return
         
         print("✅ All input files downloaded successfully.")
 
@@ -1032,7 +1062,6 @@ def create_price_update_sheet(store_products_df, theme, font_folder, output_path
         # --- 1. PRE-PROCESSING STEP ---
         # ======================================================
         
-        # ... (Pre-processing logic remains unchanged) ...
         print("\n--- Starting Pre-processing Step ---")
         
         print(f"Loading '{poster_raw_data_path}'...")
@@ -1115,8 +1144,8 @@ def create_price_update_sheet(store_products_df, theme, font_folder, output_path
         
         original_discount_str = mismatched_rows_df['discount %'].astype(str).str.lower()
         preserve_original_discount = original_discount_str.str.contains('b1g1') | \
-                                    original_discount_str.str.contains('upto') | \
-                                    original_discount_str.str.contains('flash sale')
+                                     original_discount_str.str.contains('upto') | \
+                                     original_discount_str.str.contains('flash sale')
 
         mismatched_rows_df['discount %'] = np.where(
             preserve_original_discount,
@@ -1159,8 +1188,8 @@ def create_price_update_sheet(store_products_df, theme, font_folder, output_path
 
         full_original_discount_str = merged_offers_df['discount %'].astype(str).str.lower()
         preserve_full_original_discount = full_original_discount_str.str.contains('b1g1') | \
-                                        full_original_discount_str.str.contains('upto') | \
-                                        full_original_discount_str.str.contains('flash sale')
+                                          full_original_discount_str.str.contains('upto') | \
+                                          full_original_discount_str.str.contains('flash sale')
         
         merged_offers_df['current mrp'] = np.where(
             merged_offers_df['check_flag'] == False,
@@ -1172,16 +1201,13 @@ def create_price_update_sheet(store_products_df, theme, font_folder, output_path
             merged_offers_df['Raw_SELLING_PRICE'],
             merged_offers_df['selling price'],
         )
-        merged_offers_df['discount %'] = np.where(    
-
+        merged_offers_df['discount %'] = np.where(     
             (merged_offers_df['check_flag'] == True) | (preserve_full_original_discount),
             merged_offers_df['discount %'],
             merged_offers_df['new_discount_pct']
         )
 
         
-
-
         final_csv_df = merged_offers_df[original_csv_columns]
         
         final_csv_df.to_csv(offer_articles_csv_path, index=False)
@@ -1196,7 +1222,7 @@ def create_price_update_sheet(store_products_df, theme, font_folder, output_path
 
 
         # ======================================================
-        # --- 9. POSTER GENERATION --- (Modified Section)
+        # --- 9. POSTER GENERATION ---
         # ======================================================
         print("\n--- Starting Poster Generation Step ---")
 
@@ -1208,7 +1234,7 @@ def create_price_update_sheet(store_products_df, theme, font_folder, output_path
         if offer_articles_df_for_posters.empty:
             print("✅ 'check_offer.xlsx' is empty. No price mismatches found. No posters to generate.")
             print("--- Poster Generation Complete ---")
-            exit() 
+            return
 
         offer_articles_df_for_posters['selling price'] = offer_articles_df_for_posters['selling price'].apply(clean_price)
 
@@ -1223,10 +1249,10 @@ def create_price_update_sheet(store_products_df, theme, font_folder, output_path
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         font_folder = os.path.dirname(logo_path)
         
-        # <--- NEW: Initialize dictionary to store poster counts
+        # Initialize dictionary to store poster counts
         store_poster_counts = {}
         
-        # <--- NEW: Group by store to process one store at a time ---
+        # Group by store to process one store at a time
         grouped_by_store = merged_df_for_posters.groupby('Storename')
 
         for store_location, store_df in grouped_by_store:
@@ -1293,7 +1319,7 @@ def create_price_update_sheet(store_products_df, theme, font_folder, output_path
                     
                     print(f"-> Saved locally: {output_filepath}")
 
-                    # <--- NEW: Increment the poster count for this store
+                    # Increment the poster count for this store
                     store_poster_counts[store_location] = store_poster_counts.get(store_location, 0) + 1
 
                     # --- Upload to Google Drive ---
@@ -1311,7 +1337,7 @@ def create_price_update_sheet(store_products_df, theme, font_folder, output_path
                         log_file.write(log_message)
                     continue
             
-            # --- <--- NEW: Generate Patch Sheet for the store --- ---
+            # --- Generate Patch Sheet for the store ---
             print(f"\n-> Generating price update 'patch sheet' for '{store_location}'...")
             sheet_output_name = f"_{safe_store_name}_Price_Updates_Sheet.png"
             sheet_output_path = os.path.join(store_folder_path, sheet_output_name)
@@ -1334,7 +1360,7 @@ def create_price_update_sheet(store_products_df, theme, font_folder, output_path
             
         print("\n✅ All posters and patch sheets have been processed.")
         
-        # <--- NEW: Update Google Sheet Log after all loops
+        # Update Google Sheet Log after all loops
         if store_poster_counts:
             SHEET_ID = '1pE6hMcP04nmvcGrM6AKBvznC-d0B8_oZnW6kfT5hJDA'
             update_poster_counts_sheet(gsheet_creds, store_poster_counts, SHEET_ID)
@@ -1354,7 +1380,7 @@ def create_price_update_sheet(store_products_df, theme, font_folder, output_path
         print(f"❌ An unexpected error occurred: {e}")
 
 # ==============================================================================
-# 9. SCRIPT ENTRY POINT (Renumbered)
+# 9. SCRIPT ENTRY POINT
 # ==============================================================================
 if __name__ == "__main__":
     main()
