@@ -760,6 +760,10 @@ def create_poster_special_stores(image_path, product_name, price, selling_price,
 # 7. <--- NEW: POSTER HELPER FUNCTIONS (FOR PATCHES) ---
 # ==============================================================================
 
+# ==============================================================================
+# 7. <--- NEW: POSTER HELPER FUNCTIONS (FOR PATCHES) ---
+# ==============================================================================
+
 def get_discount_badge_image(discount_percent, theme_config):
     """Creates and returns a standalone Image of the discount badge."""
     
@@ -913,6 +917,8 @@ def create_price_update_sheet(store_products_df, theme, font_folder, output_path
         font_price, font_discount, font_offer_label, font_big_savings, font_b1g1_badge, font_product_label, font_product_label_bold = [ImageFont.load_default()]*7
 
     # --- Define Theme Configs ---
+    # UPDATE: Both themes now use White Background and Black Text for Patch Sheets
+    
     if theme == 'special':
         theme_config = {
             'font_price': font_price,
@@ -920,10 +926,10 @@ def create_price_update_sheet(store_products_df, theme, font_folder, output_path
             'font_offer_label': font_offer_label,
             'font_big_savings': font_big_savings,
             'font_b1g1_badge': font_b1g1_badge,
-            'badge_color': "#fa9b0c",
-            'badge_text_color': "#FFFFFF",
-            'price_box_color': "#fa9b0c",
-            'price_box_text_color': "#FFFFFF"
+            'badge_color': "#FFFFFF",           # Forced White
+            'badge_text_color': "#000000",      # Forced Black
+            'price_box_color': "#FFFFFF",       # Forced White
+            'price_box_text_color': "#000000"   # Forced Black
         }
     else: # Default
         theme_config = {
@@ -996,53 +1002,6 @@ def create_price_update_sheet(store_products_df, theme, font_folder, output_path
             continue
 
     sheet.save(output_path)
-
-
-# ==============================================================================
-# 8. MAIN SCRIPT EXECUTION
-# ==============================================================================
-
-def main():
-    try:
-        # --- PATH CONFIGURATION ---
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        output_folder_path = os.path.join(script_dir, 'output')
-        os.makedirs(output_folder_path, exist_ok=True)
-        print(f"Using local output/temp folder: {output_folder_path}")
-        
-        # --- GOOGLE DRIVE CONFIGURATION ---
-        DATA_FOLDER_ID = '1J2epmcfA8hT8YFk4Q7G9LM3qLZzw3W_H'
-        PARENT_DRIVE_FOLDER_ID = os.environ.get('PARENT_DRIVE_FOLDER_ID')
-        if not PARENT_DRIVE_FOLDER_ID:
-            print("❌ CRITICAL ERROR: 'PARENT_DRIVE_FOLDER_ID' environment variable not set.")
-            exit()
-            
-        FILE_CONFIG = {
-            'poster_raw_data.xlsx': {'id': None, 'mime': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'},
-            'offer_articles.csv': {'id': None, 'mime': 'text/csv'},
-            'check_offer.xlsx': {'id': None, 'mime': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'},
-            'product_images_1.xlsx': {'id': None, 'mime': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'},
-            'logo_1.png': {'id': None, 'mime': 'image/png'},
-            'Oswald-Bold.ttf': {'id': None, 'mime': 'font/ttf'},
-            'Lato-Black.ttf': {'id': None, 'mime': 'font/ttf'},
-        }
-
-        # --- Local File Paths ---
-        poster_raw_data_path = os.path.join(output_folder_path, 'poster_raw_data.xlsx')
-        offer_articles_csv_path = os.path.join(output_folder_path, 'offer_articles.csv')
-        check_offer_excel_path = os.path.join(output_folder_path, 'check_offer.xlsx')
-        product_images_path = os.path.join(output_folder_path, 'product_images_1.xlsx')
-        logo_path = os.path.join(output_folder_path, 'logo_1.png')
-        
-        log_file_path = os.path.join(output_folder_path, 'failed_images.log')
-        audit_log_path = os.path.join(output_folder_path, 'price_comparison_audit_log.xlsx')
-        
-        special_store_list = [
-            'Flipkart Wholesale Amritsar', 
-            'Flipkart Wholesale Jammu', 
-            'Flipkart Wholesale Vizag'
-        ]
-
         # ======================================================
         # --- 0. AUTHENTICATE AND DOWNLOAD INPUT FILES ---
         # ======================================================
