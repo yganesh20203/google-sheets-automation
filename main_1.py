@@ -300,13 +300,13 @@ def main():
             choices = ['Till 9 Am', '9 Am to 10 Am', '10 Am to 11 Am', 'After 11 Am']
             dispatch_df['Time_Bucket'] = np.select(conditions, choices, default='Unknown')
 
-            # 6. Pivot 1: TOTAL TRIP COUNT (TripSheet Number Count) per Time Bucket
-            # CHANGED: from nunique to count to match list length
+            # 6. Pivot 1: UNIQUE TRIP SHEET COUNT per Time Bucket
+            # CHANGED: Use 'nunique' to count unique trip sheets, not rows
             time_pivot_counts = dispatch_df.pivot_table(
                 index='Store Code1', 
                 columns='Time_Bucket', 
                 values='TripSheet Number', 
-                aggfunc='count', 
+                aggfunc='nunique', 
                 fill_value=0
             )
             
