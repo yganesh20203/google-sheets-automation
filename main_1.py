@@ -274,7 +274,6 @@ def main():
     dispatch_df = df[df['TripSheet Number'].notna()].copy()
 
     # 3. Extract parts: "RJ32GD9054 9752826416_bpl 2025-11-27 12:04"
-    # Index 0: Vehicle Number, Index 2: Date, Index 3: Time
     split_data = dispatch_df['TripSheet Number'].astype(str).str.split(expand=True)
     
     if split_data.shape[1] >= 4:
@@ -301,8 +300,8 @@ def main():
             choices = ['Till 9 Am', '9 Am to 10 Am', '10 Am to 11 Am', 'After 11 Am']
             dispatch_df['Time_Bucket'] = np.select(conditions, choices, default='Unknown')
 
-            # 6. Pivot Table 1: UNIQUE Vehicle Count per Time Bucket
-            time_pivot = dispatch_df.pivot_table(
+            # 6. Pivot 1: UNIQUE Vehicle Count per Time Bucket
+            time_pivot_counts = dispatch_df.pivot_table(
                 index='Store Code1', 
                 columns='Time_Bucket', 
                 values='Extracted_Vehicle', 
@@ -310,21 +309,54 @@ def main():
                 fill_value=0
             )
             
-            # Ensure all columns exist
-            required_cols = ['Till 9 Am', '9 Am to 10 Am', '10 Am to 11 Am', 'After 11 Am']
-            for col in required_cols:
-                if col not in time_pivot.columns:
-                    time_pivot[col] = 0
-            time_pivot = time_pivot[required_cols] # Reorder
+            # 7. Pivot 2: LIST of TripSheets per Time Bucket
+            # Helper function to join unique trip sheets into a string
+            def join_tripsheets(x):
+                return ", ".join(sorted(set(str(s) for s in x if s)))
 
-            # 7. Pivot Table 2: Total Unique Vehicle Count per Store
+            time_pivot_lists = dispatch_df.pivot_table(
+                index='Store Code1',
+                columns='Time_Bucket',
+                values='TripSheet Number',
+                aggfunc=join_tripsheets,
+                fill_value=''
+            )
+
+            # 8. Ensure all columns exist and rename list columns
+            required_cols = ['Till 9 Am', '9 Am to 10 Am', '10 Am to 11 Am', 'After 11 Am']
+            
+            # Add missing count columns
+            for col in required_cols:
+                if col not in time_pivot_counts.columns:
+                    time_pivot_counts[col] = 0
+            
+            # Add suffix to list columns and ensure they exist
+            time_pivot_lists = time_pivot_lists.add_suffix('_TripSheets')
+            required_cols_lists = [c + '_TripSheets' for c in required_cols]
+            for col in required_cols_lists:
+                if col not in time_pivot_lists.columns:
+                    time_pivot_lists[col] = ''
+
+            # 9. Pivot 3: Total Unique Vehicle Count per Store
             vehicle_pivot = dispatch_df.groupby('Store Code1')['Extracted_Vehicle'].nunique().to_frame(name='Unique_Vehicle_Count')
 
-            # 8. Merge both summaries
-            dispatch_summary_final = pd.merge(time_pivot, vehicle_pivot, left_index=True, right_index=True, how='outer').fillna(0)
+            # 10. Merge all pivots
+            dispatch_summary_final = pd.concat([time_pivot_counts, time_pivot_lists, vehicle_pivot], axis=1).fillna(0)
+
+            # 11. Reorder columns for readability (Count followed by List)
+            final_col_order = []
+            for col in required_cols:
+                final_col_order.append(col)
+                final_col_order.append(col + '_TripSheets')
+            final_col_order.append('Unique_Vehicle_Count')
             
-            # Convert counts to integers
-            dispatch_summary_final = dispatch_summary_final.astype(int).reset_index()
+            # Apply reordering and reset index
+            dispatch_summary_final = dispatch_summary_final[final_col_order]
+            
+            # Clean up: Ensure list columns that were NaN (now 0 from concat/fillna) are empty strings
+            dispatch_summary_final[required_cols_lists] = dispatch_summary_final[required_cols_lists].replace(0, '')
+            
+            dispatch_summary_final.reset_index(inplace=True)
             print("✅ Dispatch Summary Report data created.")
 
     else:
