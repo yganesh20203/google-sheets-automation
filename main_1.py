@@ -267,20 +267,16 @@ def main():
     print("✅ Cross Dock Attainment summary created.")
 
     print("--- Creating Dispatch Summary (TripSheet) Report for Yesterday ---")
-    # 1. Define yesterday in YYYY-MM-DD format for matching the TripSheet date
+    # 1. Define yesterday in YYYY-MM-DD format
     yesterday_iso = (pd.to_datetime('today').normalize() - pd.Timedelta(days=1)).strftime('%Y-%m-%d')
     
-    # 2. Filter rows where 'TripSheet Number' is not null to avoid errors
+    # 2. Filter rows where 'TripSheet Number' is not null
     dispatch_df = df[df['TripSheet Number'].notna()].copy()
 
     # 3. Extract parts: "RJ32GD9054 9752826416_bpl 2025-11-27 12:04"
-    # Split by whitespace. 
-    # Index 0: Vehicle Number (RJ32GD9054)
-    # Index 2: Date (2025-11-27)
-    # Index 3: Time (12:04)
+    # Index 0: Vehicle Number, Index 2: Date, Index 3: Time
     split_data = dispatch_df['TripSheet Number'].astype(str).str.split(expand=True)
     
-    # Safely assign columns if they exist in the split result
     if split_data.shape[1] >= 4:
         dispatch_df['Extracted_Vehicle'] = split_data[0]
         dispatch_df['Extracted_Date'] = split_data[2]
@@ -294,7 +290,6 @@ def main():
              print("ℹ️ No TripSheet data found for yesterday.")
         else:
             # 5. Categorize Time Buckets
-            # Extract the hour from '12:04' -> 12
             dispatch_df['Hour'] = pd.to_numeric(dispatch_df['Extracted_Time'].str.split(':').str[0], errors='coerce')
             
             conditions = [
@@ -306,23 +301,23 @@ def main():
             choices = ['Till 9 Am', '9 Am to 10 Am', '10 Am to 11 Am', 'After 11 Am']
             dispatch_df['Time_Bucket'] = np.select(conditions, choices, default='Unknown')
 
-            # 6. Pivot Table 1: Count of occurrences per Time Bucket per Store
+            # 6. Pivot Table 1: UNIQUE Vehicle Count per Time Bucket
             time_pivot = dispatch_df.pivot_table(
                 index='Store Code1', 
                 columns='Time_Bucket', 
-                values='TripSheet Number', 
-                aggfunc='count', 
+                values='Extracted_Vehicle', 
+                aggfunc='nunique', 
                 fill_value=0
             )
             
-            # Ensure all columns exist even if no data for that specific bucket
+            # Ensure all columns exist
             required_cols = ['Till 9 Am', '9 Am to 10 Am', '10 Am to 11 Am', 'After 11 Am']
             for col in required_cols:
                 if col not in time_pivot.columns:
                     time_pivot[col] = 0
             time_pivot = time_pivot[required_cols] # Reorder
 
-            # 7. Pivot Table 2: Unique Vehicle Count per Store
+            # 7. Pivot Table 2: Total Unique Vehicle Count per Store
             vehicle_pivot = dispatch_df.groupby('Store Code1')['Extracted_Vehicle'].nunique().to_frame(name='Unique_Vehicle_Count')
 
             # 8. Merge both summaries
@@ -348,7 +343,7 @@ def main():
     upi_summary_path = os.path.join(local_data_path, 'UPI_Summary_Report.xlsx')
     non_adherence_report_path = os.path.join(local_data_path, 'Free_Delivery_Non_Adherence_Report.xlsx')
     cross_dock_report_path = os.path.join(local_data_path, 'Cross_Dock_Attainment_Summary.xlsx')
-    dispatch_report_path = os.path.join(local_data_path, 'Dispatch_Summary_Report.xlsx') # New path
+    dispatch_report_path = os.path.join(local_data_path, 'Dispatch_Summary_Report.xlsx')
 
     # Save files locally
     df.drop(columns=['Int_LR_date_dt'], inplace=True, errors='ignore')
@@ -401,7 +396,7 @@ def main():
         export_df_to_gsheet(spreadsheet, non_adherence_summary, 'Free_Delivery_Non_Adherence_Summ')
         export_df_to_gsheet(spreadsheet, non_adherence_raw_df, 'Free_Delivery_Non_Adherence_Raw')
         export_df_to_gsheet(spreadsheet, cross_dock_summary, 'Cross_Dock_Attainment_Summary')
-        export_df_to_gsheet(spreadsheet, dispatch_summary_final, 'Dispatch_summary') # New Export
+        export_df_to_gsheet(spreadsheet, dispatch_summary_final, 'Dispatch_summary')
     except Exception as e:
         print(f"\n❌ An error occurred during the Google Sheets export process: {e}")
     print("-" * 30)
