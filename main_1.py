@@ -300,17 +300,17 @@ def main():
             choices = ['Till 9 Am', '9 Am to 10 Am', '10 Am to 11 Am', 'After 11 Am']
             dispatch_df['Time_Bucket'] = np.select(conditions, choices, default='Unknown')
 
-            # 6. Pivot 1: UNIQUE Vehicle Count per Time Bucket
+            # 6. Pivot 1: TOTAL TRIP COUNT (TripSheet Number Count) per Time Bucket
+            # CHANGED: from nunique to count to match list length
             time_pivot_counts = dispatch_df.pivot_table(
                 index='Store Code1', 
                 columns='Time_Bucket', 
-                values='Extracted_Vehicle', 
-                aggfunc='nunique', 
+                values='TripSheet Number', 
+                aggfunc='count', 
                 fill_value=0
             )
             
             # 7. Pivot 2: LIST of TripSheets per Time Bucket
-            # Helper function to join unique trip sheets into a string
             def join_tripsheets(x):
                 return ", ".join(sorted(set(str(s) for s in x if s)))
 
@@ -337,7 +337,7 @@ def main():
                 if col not in time_pivot_lists.columns:
                     time_pivot_lists[col] = ''
 
-            # 9. Pivot 3: Total Unique Vehicle Count per Store
+            # 9. Pivot 3: Total Unique Vehicle Count per Store (Stays UNIQUE)
             vehicle_pivot = dispatch_df.groupby('Store Code1')['Extracted_Vehicle'].nunique().to_frame(name='Unique_Vehicle_Count')
 
             # 10. Merge all pivots
