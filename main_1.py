@@ -13,7 +13,6 @@ import io
 # --- 1. USER CONFIGURATION: You must edit these values ---
 
 # Paste the ID for the folder where ALL your input and output files are located.
-# This is the most important setting.
 INPUT_OUTPUT_FOLDER_ID = '1a7BSDVcQOXon5jP2CoGSpodnv7Ggj9Da'
 
 # Paste the full URL of your target Google Sheet.
@@ -80,6 +79,9 @@ def export_df_to_gsheet(spreadsheet, df_to_export, sheet_name):
     try:
         if not isinstance(df_to_export.index, pd.RangeIndex):
             df_to_export = df_to_export.reset_index()
+
+        # Handle NaN/Inf for JSON serialization
+        df_to_export = df_to_export.fillna('')
 
         export_data = [df_to_export.columns.values.tolist()] + df_to_export.values.tolist()
 
@@ -172,11 +174,10 @@ def main():
     df['Load'] = np.select([(df['distance'].isna()) & (df['Key'] != 0), (df['Gross Weight'] > 3000), (df['distance'] > 100)], ['>100', 'Bulk', '>100'], default='Normal')
     print("✅ Data processing and enrichment complete.")
 
-    # --- **NEW LOCATION FOR DEDUPLICATION** ---
+    # --- Deduplication ---
     initial_rows = df.shape[0]
     df.drop_duplicates(inplace=True)
     print(f"🧹 De-duplicated main data, removed {initial_rows - df.shape[0]} rows.")
-    # --- End of change ---
 
     print("--- Creating Store Summary Report ---")
     today_str_format1 = pd.to_datetime('today').strftime('%m/%d/%Y')
@@ -264,6 +265,76 @@ def main():
     else:
         cross_dock_summary = pd.pivot_table(cross_dock_filtered_df, index=['Store_Name', 'X_doc'], values='Item Gross Weight', aggfunc='sum', fill_value=0).reset_index()
     print("✅ Cross Dock Attainment summary created.")
+
+    print("--- Creating Dispatch Summary (TripSheet) Report for Yesterday ---")
+    # 1. Define yesterday in YYYY-MM-DD format for matching the TripSheet date
+    yesterday_iso = (pd.to_datetime('today').normalize() - pd.Timedelta(days=1)).strftime('%Y-%m-%d')
+    
+    # 2. Filter rows where 'TripSheet Number' is not null to avoid errors
+    dispatch_df = df[df['TripSheet Number'].notna()].copy()
+
+    # 3. Extract parts: "RJ32GD9054 9752826416_bpl 2025-11-27 12:04"
+    # Split by whitespace. 
+    # Index 0: Vehicle Number (RJ32GD9054)
+    # Index 2: Date (2025-11-27)
+    # Index 3: Time (12:04)
+    split_data = dispatch_df['TripSheet Number'].astype(str).str.split(expand=True)
+    
+    # Safely assign columns if they exist in the split result
+    if split_data.shape[1] >= 4:
+        dispatch_df['Extracted_Vehicle'] = split_data[0]
+        dispatch_df['Extracted_Date'] = split_data[2]
+        dispatch_df['Extracted_Time'] = split_data[3]
+        
+        # 4. Filter for yesterday's date
+        dispatch_df = dispatch_df[dispatch_df['Extracted_Date'] == yesterday_iso]
+
+        if dispatch_df.empty:
+             dispatch_summary_final = None
+             print("ℹ️ No TripSheet data found for yesterday.")
+        else:
+            # 5. Categorize Time Buckets
+            # Extract the hour from '12:04' -> 12
+            dispatch_df['Hour'] = pd.to_numeric(dispatch_df['Extracted_Time'].str.split(':').str[0], errors='coerce')
+            
+            conditions = [
+                dispatch_df['Hour'] < 9,
+                (dispatch_df['Hour'] >= 9) & (dispatch_df['Hour'] < 10),
+                (dispatch_df['Hour'] >= 10) & (dispatch_df['Hour'] < 11),
+                dispatch_df['Hour'] >= 11
+            ]
+            choices = ['Till 9 Am', '9 Am to 10 Am', '10 Am to 11 Am', 'After 11 Am']
+            dispatch_df['Time_Bucket'] = np.select(conditions, choices, default='Unknown')
+
+            # 6. Pivot Table 1: Count of occurrences per Time Bucket per Store
+            time_pivot = dispatch_df.pivot_table(
+                index='Store Code1', 
+                columns='Time_Bucket', 
+                values='TripSheet Number', 
+                aggfunc='count', 
+                fill_value=0
+            )
+            
+            # Ensure all columns exist even if no data for that specific bucket
+            required_cols = ['Till 9 Am', '9 Am to 10 Am', '10 Am to 11 Am', 'After 11 Am']
+            for col in required_cols:
+                if col not in time_pivot.columns:
+                    time_pivot[col] = 0
+            time_pivot = time_pivot[required_cols] # Reorder
+
+            # 7. Pivot Table 2: Unique Vehicle Count per Store
+            vehicle_pivot = dispatch_df.groupby('Store Code1')['Extracted_Vehicle'].nunique().to_frame(name='Unique_Vehicle_Count')
+
+            # 8. Merge both summaries
+            dispatch_summary_final = pd.merge(time_pivot, vehicle_pivot, left_index=True, right_index=True, how='outer').fillna(0)
+            
+            # Convert counts to integers
+            dispatch_summary_final = dispatch_summary_final.astype(int).reset_index()
+            print("✅ Dispatch Summary Report data created.")
+
+    else:
+        dispatch_summary_final = None
+        print("❌ 'TripSheet Number' format unexpected or empty.")
     print("-" * 30)
 
     # --- 4. Saving & Uploading Output Files ---
@@ -277,6 +348,7 @@ def main():
     upi_summary_path = os.path.join(local_data_path, 'UPI_Summary_Report.xlsx')
     non_adherence_report_path = os.path.join(local_data_path, 'Free_Delivery_Non_Adherence_Report.xlsx')
     cross_dock_report_path = os.path.join(local_data_path, 'Cross_Dock_Attainment_Summary.xlsx')
+    dispatch_report_path = os.path.join(local_data_path, 'Dispatch_Summary_Report.xlsx') # New path
 
     # Save files locally
     df.drop(columns=['Int_LR_date_dt'], inplace=True, errors='ignore')
@@ -303,8 +375,17 @@ def main():
     if cross_dock_summary is not None:
         cross_dock_summary.to_excel(cross_dock_report_path, index=False, sheet_name='Cross_Dock_Summary')
 
+    if dispatch_summary_final is not None:
+        dispatch_summary_final.to_excel(dispatch_report_path, index=False, sheet_name='Dispatch_summary')
+
     # Upload all generated files to Google Drive
-    for path in [output_file_path, summary_output_path, order_attainment_path, capacity_summary_path, upi_summary_path, non_adherence_report_path, cross_dock_report_path]:
+    files_to_upload = [
+        output_file_path, summary_output_path, order_attainment_path, 
+        capacity_summary_path, upi_summary_path, non_adherence_report_path, 
+        cross_dock_report_path, dispatch_report_path
+    ]
+
+    for path in files_to_upload:
         upload_file_to_drive(drive_service, path, INPUT_OUTPUT_FOLDER_ID)
     print("-" * 30)
 
@@ -320,6 +401,7 @@ def main():
         export_df_to_gsheet(spreadsheet, non_adherence_summary, 'Free_Delivery_Non_Adherence_Summ')
         export_df_to_gsheet(spreadsheet, non_adherence_raw_df, 'Free_Delivery_Non_Adherence_Raw')
         export_df_to_gsheet(spreadsheet, cross_dock_summary, 'Cross_Dock_Attainment_Summary')
+        export_df_to_gsheet(spreadsheet, dispatch_summary_final, 'Dispatch_summary') # New Export
     except Exception as e:
         print(f"\n❌ An error occurred during the Google Sheets export process: {e}")
     print("-" * 30)
