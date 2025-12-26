@@ -1,0 +1,172 @@
+# 📘 Manual Replication Guide: Supply Chain Reports
+
+This document outlines the Standard Operating Procedure (SOP) to manually replicate the logic performed by the `main.py` automation script using Microsoft Excel. Use this guide for auditing data or generating reports if the automation script is unavailable.
+
+## 📂 1. Prerequisites & Input Files
+
+Ensure all the following files are located in a single working folder:
+
+1.  `Capacity_dump.csv` (The Main Raw Data)
+2.  `CT_Master_Store_Code.xlsx` (Store Master Data)
+3.  `Pincode_distance.xlsx` (Distance Mapping)
+4.  `Xd_store.xlsx` (Cross Dock Mapping)
+5.  `Free_delivery_list.xlsx` (Membership Whitelist)
+
+---
+
+## ⚙️ 2. Data Preparation (Master Sheet)
+
+Open **`Capacity_dump.csv`**. This will be your primary working file.
+
+### A. Date Formatting
+Select the following columns and change the format to **Short Date** (Ctrl+1 > Date):
+* `Order Date IST`
+* `Delivery Success Timestamp`
+* `LR Date Time`
+
+### B. Numeric Cleaning
+Ensure the following columns are formatted as **Number** (highlight column > Data > Text to Columns > Finish to force number format):
+* `Gross Weight`
+* `Item Gross Weight`
+* `Net_Amount`
+* `Invoice Value`
+
+### C. Calculated Columns (Formulas)
+Add the following headers to new columns at the far right of the sheet.
+*(Note: Replace `[Cell]` with the cell reference of the current row, e.g., `A2`)*
+
+#### 1. Data Parsing
+* **Int_pincode** (Extract Number):
+    ```excel
+    =VALUE(LEFT([ShipToPincode_Cell], 6))
+    ```
+* **Int_storecode** (Extract Number):
+    ```excel
+    =VALUE([Store Code1_Cell])
+    ```
+* **Key** (Unique ID for Distance Lookup):
+    ```excel
+    =[Int_storecode_Cell] & [Int_pincode_Cell]
+    ```
+* **M track** (Last 8 digits of Member ID):
+    ```excel
+    =RIGHT([Member Id_Cell], 8)
+    ```
+
+#### 2. Data Enrichment (VLOOKUPs)
+* **Store_Name:**
+    ```excel
+    =VLOOKUP([Int_storecode_Cell], '[CT_Master_Store_Code.xlsx]Sheet1'!$A:$B, 2, FALSE)
+    ```
+* **Distance:**
+    ```excel
+    =VLOOKUP([Key_Cell], '[Pincode_distance.xlsx]Sheet1'!$A:$B, 2, FALSE)
+    ```
+* **X_doc** (Cross Dock Name):
+    ```excel
+    =VLOOKUP([Int_pincode_Cell], '[Xd_store.xlsx]Sheet1'!$A:$B, 2, FALSE)
+    ```
+* **Cheque** (Free Delivery Whitelist Match):
+    ```excel
+    =IF(ISNUMBER(MATCH([M track_Cell], '[Free_delivery_list.xlsx]Sheet1'!$A:$A, 0)), "Yes", "No")
+    ```
+
+#### 3. Business Logic Classifications
+* **Free_Delivery** (Logic: DSD is always yes; ISP/Walkin requires Whitelist match):
+    ```excel
+    =IF([Mode of Fullfillment_Cell]="DSD", "Yes", IF(AND(OR([Mode of Fullfillment_Cell]="ISP", [Mode of Fullfillment_Cell]="Walkin"), [Cheque_Cell]="Yes"), "Yes", "No"))
+    ```
+* **Considered** (Logic: DSD/ISP with Free Delivery = Yes):
+    ```excel
+    =IF(AND(OR([Mode of Fullfillment_Cell]="DSD", [Mode of Fullfillment_Cell]="ISP"), [Free_Delivery_Cell]="Yes"), "Yes", "No")
+    ```
+* **Load** (Logic: Categorize by Weight and Distance):
+    ```excel
+    =IF(AND(ISERROR([Distance_Cell]), [Key_Cell]<>0), ">100", IF([Gross Weight_Cell]>3000, "Bulk", IF([Distance_Cell]>100, ">100", "Normal")))
+    ```
+
+---
+
+## 🧹 3. Deduplication
+**Crucial Step:** Before creating reports, select your entire dataset (Ctrl+A), go to **Data > Remove Duplicates**, and click OK.
+
+---
+
+## 📊 4. Generating the Reports
+
+Use **Pivot Tables** (Insert > PivotTable) to generate the specific outputs below.
+
+### 📝 Report A: Store Summary Report
+**Filter:** `Current Flow` IN ("Dummy Task", "Reattempt", "Transportation")
+
+| Pivot Field | Setting |
+| :--- | :--- |
+| **Rows** | `Store_Name` |
+| **Columns** | `Current Flow` |
+| **Values** | Sum of `Item Gross Weight` |
+
+**Manual Additions (Calculated Columns):**
+1.  **Critical Order Tonnage:** Sum weight where `Order Date` != Today AND Status IN ("Dummy Task", "Reattempt", "Transportation").
+2.  **Avg Specific Tonnage (Last 3 Days):** Filter for `LR Date` >= (Today-2), `Vehicle Model` = Small (Ace/Pickup/Auto), Status = End/Delivery Field. Sum Weight / 3.
+
+### 📦 Report B: Order Attainment (Yesterday)
+**Global Filter:** `Order Date IST` = **Yesterday's Date**
+
+**Table 1 (Overall):**
+* **Rows:** `Store_Name`
+* **Columns:** `Load`
+* **Values:** Sum of `Item Gross Weight`
+
+**Table 2 (Considered Only):**
+* **Additional Filter:** `Considered` = "Yes"
+* **Rows:** `Store_Name`
+* **Columns:** `Load`
+* **Values:** Sum of `Item Gross Weight`
+
+### 🚚 Report C: Capacity Summary
+**Global Filter:** `LR Date Time` = **Yesterday's Date**
+
+**Columns to Calculate per Store:**
+1.  **Contractual Weight:** Sum Weight where `Vehicle type` != "adhoc" AND `Vehicle Model` IN (Tata Ace, Pickup, Auto, Bolero, Eicher).
+2.  **Adhoc Weight:** Sum Weight where `Vehicle type` == "adhoc" AND `Vehicle Model` IN (Tata Ace, Pickup, Auto, Bolero, Eicher).
+3.  **Vehicle Counts:** Count Unique `Vehicle Number1` for both categories above.
+
+### 💰 Report D: UPI Summary
+**Filters:**
+1.  `Payment Mode` = "Cash on Del Store"
+2.  `Delivery Success Timestamp` (Date) = **Yesterday**
+
+**Metrics per Store:**
+* **Unique UPI:** Count Distinct `upiTransactionId`.
+* **Total UPI Amt:** Sum `Net_Amount` WHERE `upiTransactionId` is NOT Empty.
+
+### ⚠️ Report E: Free Delivery Non-Adherence
+**Filters:**
+1.  `LR Date Time` = **Yesterday**
+2.  `Free_Delivery` = "No"
+3.  `Vehicle Model` = Small Vehicles (Tata Ace, Auto, Pickup, etc.)
+4.  `Invoice Value` < 750,000
+5.  `Load` = "Normal"
+
+**Metrics:** Count of `Reference Number`, Sum of `Net_Amount`.
+
+### ⚓ Report F: Cross Dock Attainment
+**Filters:**
+1.  `Considered` = "Yes"
+2.  `Order Date IST` = **Yesterday**
+3.  `Prev Status` != "handover_to_member"
+
+**Pivot:**
+* **Rows:** `Store_Name` AND `X_doc`
+* **Values:** Sum of `Item Gross Weight`
+
+### ⏱️ Report G: Dispatch Summary (TripSheet)
+**Filter:** `TripSheet Number` is NOT Empty.
+
+**Data Parsing:**
+Use **Text to Columns** on `TripSheet Number` (Delimiter: Space) to extract Date and Time. Filter for **Yesterday**.
+
+**Time Bucket Formula:**
+Assuming extracted time is in Cell `T2`:
+```excel
+=IF(HOUR(T2)<9, "Till 9 Am", IF(HOUR(T2)<10, "9 Am to 10 Am", IF(HOUR(T2)<11, "10 Am to 11 Am", "After 11 Am")))
