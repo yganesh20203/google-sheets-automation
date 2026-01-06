@@ -349,13 +349,15 @@ def process_article_sales_report(df_article, df_hirarchy, df_division_group, df_
         if 'Article No' in df_article.columns and 'Store No' in df_article.columns:
             article_no_col_index = df_article.columns.get_loc('Article No')
             
-            store_no_str = df_article['Store No'].astype(str)
-            article_no_str = df_article['Article No'].astype(str)
+            # --- Robust Conversion for Article UID Creation ---
+            # Remove decimals if they exist (e.g. 101.0 -> 101) by converting to numeric first
+            s_store = pd.to_numeric(df_article['Store No'], errors='coerce').fillna(0).astype('int64').astype(str)
+            s_article = pd.to_numeric(df_article['Article No'], errors='coerce').fillna(0).astype('int64').astype(str)
 
             df_article.insert(
                 article_no_col_index + 1,
                 'Article UID',
-                store_no_str + article_no_str
+                s_store + s_article
             )
             log("      - Added 'Article UID' column.")
         else:
@@ -374,6 +376,7 @@ def process_article_sales_report(df_article, df_hirarchy, df_division_group, df_
                     log(f"      - [WARN] Neither 'Store' nor 'Store No' found. Appending Region/Manager to the end.")
                     store_col_index = len(df_article.columns) - 1
                 
+                # Standardize Store No for merge
                 df_article['Store No'] = df_article['Store No'].astype(str)
                 df_hirarchy['Location'] = df_hirarchy['Location'].astype(str)
 
@@ -521,22 +524,34 @@ def process_article_sales_report(df_article, df_hirarchy, df_division_group, df_
         else:
             log("      - [WARN] 'gst_change_list.csv' not loaded or 'Article UID' missing. Skipping GST_Change lookup.")
 
-        # 6. Add YTD Sales columns (UPDATED FOR 2025)
-        # --- ADDED '2025 YTD Sales' to the list below ---
+        # 6. Add YTD Sales columns (FIXED for General Format/Floats)
         ytd_cols_to_add = ['2021 YTD Sales', '2022 YTD Sales', '2023 YTD Sales', '2024 YTD Sales', '2025 YTD Sales']
         
         if df_ytd_sales is not None and 'Article UID' in df_article.columns:
             ytd_cols_to_merge = ['Article UID'] + ytd_cols_to_add
             
-            # Only proceed if columns exist in the helper file (warn if missing but try to merge what's there)
+            # Check which columns actually exist
             available_ytd_cols = [col for col in ytd_cols_to_merge if col in df_ytd_sales.columns]
             
             if 'Article UID' in available_ytd_cols and len(available_ytd_cols) > 1:
                 
                 original_cols = list(df_article.columns)
                 
-                df_article['Article UID'] = df_article['Article UID'].astype(str)
-                df_ytd_sales['Article UID'] = df_ytd_sales['Article UID'].astype(str)
+                # --- FIX: ROBUST CONVERSION OF ARTICLE UID ---
+                # This ensures "101555.0" (float/general) becomes "101555" (string)
+                
+                # 1. Clean Main DF UID (just in case)
+                df_article['Article UID'] = df_article['Article UID'].astype(str).str.replace(r'\.0$', '', regex=True)
+                
+                # 2. Clean YTD Sales UID (Critical Step)
+                # Convert to numeric first to handle string representations of floats, fill na with -1, 
+                # convert to int to strip decimals, then to string.
+                ytd_uids = pd.to_numeric(df_ytd_sales['Article UID'], errors='coerce').fillna(-1).astype('int64').astype(str)
+                
+                # Update the DataFrame with cleaned UIDs
+                df_ytd_sales['Article UID'] = ytd_uids
+
+                # ---------------------------------------------
 
                 df_article = pd.merge(
                     df_article,
@@ -568,7 +583,7 @@ def process_article_sales_report(df_article, df_hirarchy, df_division_group, df_
         else:
             log("      - [WARN] 'ytd_sales.csv' not loaded or 'Article UID' missing. Skipping YTD Sales lookup.")
 
-        # 7. Add Average Sales columns (UPDATED FOR 2025)
+        # 7. Add Average Sales columns
         if day_of_year > 0:
             avg_cols_to_add = []
             original_cols = list(df_article.columns)
@@ -578,7 +593,6 @@ def process_article_sales_report(df_article, df_hirarchy, df_division_group, df_
                 avg_cols_to_add.append('YTD Avg Sales')
                 log("      - Calculated 'YTD Avg Sales'.")
             
-            # --- UPDATED LOOP TO INCLUDE 2025 ---
             for year in [2021, 2022, 2023, 2024, 2025]:
                 ytd_col = f'{year} YTD Sales'
                 avg_col = f'{year} Avg Sales'
@@ -587,13 +601,11 @@ def process_article_sales_report(df_article, df_hirarchy, df_division_group, df_
                     avg_cols_to_add.append(avg_col)
                     log(f"      - Calculated '{avg_col}'.")
             
-            # --- UPDATED ANCHOR TO 2025 ---
             if '2025 YTD Sales' in original_cols:
                 ytd_2025_index = original_cols.index('2025 YTD Sales')
                 for col in reversed(avg_cols_to_add):
                     if col not in original_cols:
                         original_cols.insert(ytd_2025_index + 1, col)
-            # Fallback to 2024 if 2025 is missing
             elif '2024 YTD Sales' in original_cols:
                 ytd_2024_index = original_cols.index('2024 YTD Sales')
                 for col in reversed(avg_cols_to_add):
@@ -612,7 +624,7 @@ def process_article_sales_report(df_article, df_hirarchy, df_division_group, df_
         else:
             log(f"      - [WARN] day_of_year is {day_of_year}. Skipping average sales calculations.")
 
-        # 8. Add Day On Hand (UPDATED FOR 2025 POSITIONING)
+        # 8. Add Day On Hand
         if day_of_year > 0 and 'YTD COST Amt' in df_article.columns and 'On Hand Cost' in df_article.columns:
             original_cols = list(df_article.columns)
             
@@ -622,7 +634,6 @@ def process_article_sales_report(df_article, df_hirarchy, df_division_group, df_
             df_article['Day On Hand'] = on_hand_cost / avg_daily_cost
             df_article['Day On Hand'] = df_article['Day On Hand'].replace([np.inf, -np.inf], np.nan)
             
-            # --- UPDATED TO LOOK FOR 2025 AVG SALES FIRST ---
             last_avg_col = '2025 Avg Sales'
             if last_avg_col in original_cols:
                 last_avg_index = original_cols.index(last_avg_col)
