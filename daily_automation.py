@@ -521,13 +521,17 @@ def process_article_sales_report(df_article, df_hirarchy, df_division_group, df_
         else:
             log("      - [WARN] 'gst_change_list.csv' not loaded or 'Article UID' missing. Skipping GST_Change lookup.")
 
-        # 6. Add YTD Sales columns
-        ytd_cols_to_add = ['2021 YTD Sales', '2022 YTD Sales', '2023 YTD Sales', '2024 YTD Sales']
+        # 6. Add YTD Sales columns (UPDATED FOR 2025)
+        # --- ADDED '2025 YTD Sales' to the list below ---
+        ytd_cols_to_add = ['2021 YTD Sales', '2022 YTD Sales', '2023 YTD Sales', '2024 YTD Sales', '2025 YTD Sales']
+        
         if df_ytd_sales is not None and 'Article UID' in df_article.columns:
             ytd_cols_to_merge = ['Article UID'] + ytd_cols_to_add
             
-            missing_cols = [col for col in ytd_cols_to_merge if col not in df_ytd_sales.columns]
-            if not missing_cols:
+            # Only proceed if columns exist in the helper file (warn if missing but try to merge what's there)
+            available_ytd_cols = [col for col in ytd_cols_to_merge if col in df_ytd_sales.columns]
+            
+            if 'Article UID' in available_ytd_cols and len(available_ytd_cols) > 1:
                 
                 original_cols = list(df_article.columns)
                 
@@ -536,7 +540,7 @@ def process_article_sales_report(df_article, df_hirarchy, df_division_group, df_
 
                 df_article = pd.merge(
                     df_article,
-                    df_ytd_sales[ytd_cols_to_merge],
+                    df_ytd_sales[available_ytd_cols],
                     on='Article UID',
                     how='left'
                 )
@@ -544,12 +548,12 @@ def process_article_sales_report(df_article, df_hirarchy, df_division_group, df_
                 if 'GST_Change' in original_cols:
                     gst_index = original_cols.index('GST_Change')
                     for col in reversed(ytd_cols_to_add):
-                        if col not in original_cols:
+                        if col in df_article.columns and col not in original_cols:
                             original_cols.insert(gst_index + 1, col)
                 else:
                     log("      - [WARN] 'GST_Change' column not found. Appending YTD Sales columns to the end.")
                     for col in ytd_cols_to_add:
-                        if col not in original_cols:
+                        if col in df_article.columns and col not in original_cols:
                             original_cols.append(col)
                 
                 final_cols = [c for c in original_cols if c in df_article.columns]
@@ -558,13 +562,13 @@ def process_article_sales_report(df_article, df_hirarchy, df_division_group, df_
                         final_cols.append(new_col)
                         
                 df_article = df_article[final_cols]
-                log("      - Added YTD Sales columns (2021-2024).")
+                log("      - Added YTD Sales columns (2021-2025).")
             else:
-                log(f"      - [WARN] Required YTD Sales columns ({', '.join(missing_cols)}) not found in ytd_sales.csv. Skipping YTD Sales lookup.")
+                log(f"      - [WARN] Required YTD Sales columns not found in ytd_sales.csv. Available: {available_ytd_cols}")
         else:
             log("      - [WARN] 'ytd_sales.csv' not loaded or 'Article UID' missing. Skipping YTD Sales lookup.")
 
-        # 7. Add Average Sales columns
+        # 7. Add Average Sales columns (UPDATED FOR 2025)
         if day_of_year > 0:
             avg_cols_to_add = []
             original_cols = list(df_article.columns)
@@ -574,7 +578,8 @@ def process_article_sales_report(df_article, df_hirarchy, df_division_group, df_
                 avg_cols_to_add.append('YTD Avg Sales')
                 log("      - Calculated 'YTD Avg Sales'.")
             
-            for year in [2021, 2022, 2023, 2024]:
+            # --- UPDATED LOOP TO INCLUDE 2025 ---
+            for year in [2021, 2022, 2023, 2024, 2025]:
                 ytd_col = f'{year} YTD Sales'
                 avg_col = f'{year} Avg Sales'
                 if ytd_col in df_article.columns:
@@ -582,7 +587,14 @@ def process_article_sales_report(df_article, df_hirarchy, df_division_group, df_
                     avg_cols_to_add.append(avg_col)
                     log(f"      - Calculated '{avg_col}'.")
             
-            if '2024 YTD Sales' in original_cols:
+            # --- UPDATED ANCHOR TO 2025 ---
+            if '2025 YTD Sales' in original_cols:
+                ytd_2025_index = original_cols.index('2025 YTD Sales')
+                for col in reversed(avg_cols_to_add):
+                    if col not in original_cols:
+                        original_cols.insert(ytd_2025_index + 1, col)
+            # Fallback to 2024 if 2025 is missing
+            elif '2024 YTD Sales' in original_cols:
                 ytd_2024_index = original_cols.index('2024 YTD Sales')
                 for col in reversed(avg_cols_to_add):
                     if col not in original_cols:
@@ -600,7 +612,7 @@ def process_article_sales_report(df_article, df_hirarchy, df_division_group, df_
         else:
             log(f"      - [WARN] day_of_year is {day_of_year}. Skipping average sales calculations.")
 
-        # 8. Add Day On Hand
+        # 8. Add Day On Hand (UPDATED FOR 2025 POSITIONING)
         if day_of_year > 0 and 'YTD COST Amt' in df_article.columns and 'On Hand Cost' in df_article.columns:
             original_cols = list(df_article.columns)
             
@@ -610,9 +622,14 @@ def process_article_sales_report(df_article, df_hirarchy, df_division_group, df_
             df_article['Day On Hand'] = on_hand_cost / avg_daily_cost
             df_article['Day On Hand'] = df_article['Day On Hand'].replace([np.inf, -np.inf], np.nan)
             
-            last_avg_col = '2024 Avg Sales'
+            # --- UPDATED TO LOOK FOR 2025 AVG SALES FIRST ---
+            last_avg_col = '2025 Avg Sales'
             if last_avg_col in original_cols:
                 last_avg_index = original_cols.index(last_avg_col)
+                if 'Day On Hand' not in original_cols:
+                    original_cols.insert(last_avg_index + 1, 'Day On Hand')
+            elif '2024 Avg Sales' in original_cols:
+                last_avg_index = original_cols.index('2024 Avg Sales')
                 if 'Day On Hand' not in original_cols:
                     original_cols.insert(last_avg_index + 1, 'Day On Hand')
             else:
@@ -922,4 +939,3 @@ if __name__ == "__main__":
     else:
         log("❌ Halting script: Authentication failed.")
     log("--- Script execution finished ---")
-
