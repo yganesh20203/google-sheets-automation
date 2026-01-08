@@ -31,20 +31,20 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # --- NEW APPROACH ---
-          # Uninstall all versions
+          
+          # --- OPENPYXL FIX ---
+          # Uninstall all versions first to avoid conflicts
           pip uninstall -y openpyxl et-xmlfile
           
-          # Install a specific, stable version (3.0.10)
-          # This version uses the older, more stable pivot table import paths
+          # Install a specific, stable version (3.0.10) for .xlsm support
           pip install openpyxl==3.0.10
-          # --- END NEW APPROACH ---
+          # --- END OPENPYXL FIX ---
           
-          pip install pandas google-api-python-client google-auth-httplib2 google-auth-oauthlib
+          # Install the rest of the required libraries
+          # ADDED: xlsxwriter (Critical for the new graphs/dashboard feature)
+          pip install pandas google-api-python-client google-auth-httplib2 google-auth-oauthlib xlsxwriter
 
       # Step 4: Authenticate with Google Cloud
-      # This securely takes the secret you'll create (GCP_SA_KEY)
-      # and saves it as a temporary 'credentials.json' file for the script to use.
       - name: Authenticate to Google Cloud
         env:
           # This secret name 'GCP_SA_KEY' MUST match the name you create in GitHub
@@ -57,4 +57,3 @@ jobs:
           # This tells the Python script where to find the credentials file
           GOOGLE_APPLICATION_CREDENTIALS: credentials.json
         run: python daily_automation.py
-
