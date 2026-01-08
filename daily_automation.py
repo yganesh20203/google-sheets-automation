@@ -378,9 +378,6 @@ def generate_excel_insights_report(df, date_str):
             if i == 4: fmt = workbook.add_format({'num_format': '0.00'}) # Efficiency is a ratio
             ws_dash.write(4 + i, 1, row[0], fmt)
             ws_dash.write(4 + i, 2, row[1], fmt)
-        
-        # Diagram trigger for dashboard concept
-        # 
 
         # CHART: Top 10 Stores by FTD Sales
         if 'Store' in df.columns and 'FTD Sale Amt' in df.columns:
@@ -416,10 +413,6 @@ def generate_excel_insights_report(df, date_str):
             pareto_df.head(100).to_excel(writer, sheet_name='Pareto', index=False)
             
             # Add Pareto Chart (Combo Chart)
-            # 
-
-[Image of pareto chart example]
-
             chart_pareto = workbook.add_chart({'type': 'column'})
             chart_pareto.add_series({
                 'name':       'Sales',
