@@ -327,7 +327,7 @@ def process_article_sales_report(df, df_hirarchy, df_div, df_instock, df_gst, df
 
 def generate_excel_insights_report(df, date_str):
     """
-    Generates a sophisticated Excel report with Charts, Pareto Analysis,
+    Generates a sophisticated Excel report with Charts, Store-Level Pareto Analysis,
     and Drill-Downs using XlsxWriter.
     """
     log("    > Spinning up Intelligence Engine (Excel Generation)...")
@@ -346,6 +346,7 @@ def generate_excel_insights_report(df, date_str):
         
         # Styles
         fmt_header = workbook.add_format({'bold': True, 'bg_color': '#2F75B5', 'font_color': 'white', 'border': 1})
+        fmt_subhead = workbook.add_format({'bold': True, 'bg_color': '#DDEBF7', 'border': 1})
         fmt_currency = workbook.add_format({'num_format': '₹ #,##0.00'})
         fmt_number = workbook.add_format({'num_format': '#,##0'})
         fmt_pct = workbook.add_format({'num_format': '0.0%'})
@@ -375,21 +376,20 @@ def generate_excel_insights_report(df, date_str):
         
         for i, row in enumerate(data_kpi):
             fmt = fmt_header if i == 0 else fmt_currency
-            if i == 4: fmt = workbook.add_format({'num_format': '0.00'}) # Efficiency is a ratio
+            if i == 4: fmt = workbook.add_format({'num_format': '0.00'}) 
             ws_dash.write(4 + i, 1, row[0], fmt)
             ws_dash.write(4 + i, 2, row[1], fmt)
 
         # CHART: Top 10 Stores by FTD Sales
         if 'Store' in df.columns and 'FTD Sale Amt' in df.columns:
             top_stores = df.groupby('Store')['FTD Sale Amt'].sum().nlargest(10).reset_index()
-            # Write data strictly for chart reference (hidden usually, but here visible)
             top_stores.to_excel(writer, sheet_name='Dashboard', startrow=12, startcol=1, index=False)
             
             chart_col = workbook.add_chart({'type': 'column'})
             chart_col.add_series({
                 'name':       'FTD Sales',
-                'categories': ['Dashboard', 13, 1, 22, 1], # Store Names
-                'values':     ['Dashboard', 13, 2, 22, 2], # Sales Values
+                'categories': ['Dashboard', 13, 1, 22, 1],
+                'values':     ['Dashboard', 13, 2, 22, 2],
                 'fill':       {'color': '#4472C4'}
             })
             chart_col.set_title({'name': 'Top 10 Stores (Today\'s Sales)'})
@@ -397,40 +397,71 @@ def generate_excel_insights_report(df, date_str):
             ws_dash.insert_chart('E5', chart_col)
 
         # ----------------------------------------------------
-        # SHEET 2: PARETO ANALYSIS (80/20 Rule)
+        # SHEET 2: STORE-LEVEL PARETO (Based on FTD)
         # ----------------------------------------------------
-        log("      > Building Sheet 2: Pareto Analysis...")
-        if 'Article Description' in df.columns and 'YTD Sale Amt' in df.columns:
-            # Logic: Group by Article, Sort Descending, Calc Cumulative %
-            pareto_df = df.groupby('Article Description')['YTD Sale Amt'].sum().reset_index()
-            pareto_df = pareto_df.sort_values(by='YTD Sale Amt', ascending=False)
-            total_rev = pareto_df['YTD Sale Amt'].sum()
-            pareto_df['Cumulative'] = pareto_df['YTD Sale Amt'].cumsum()
-            pareto_df['Cum %'] = pareto_df['Cumulative'] / total_rev
-            pareto_df['Class'] = np.where(pareto_df['Cum %'] <= 0.80, 'A (Top 80%)', 'B (Tail 20%)')
+        log("      > Building Sheet 2: Store-Level Pareto...")
+        ws_pareto = workbook.add_worksheet('Pareto_Analysis')
+        
+        if 'Store' in df.columns and 'FTD Sale Amt' in df.columns and 'Article Description' in df.columns:
             
-            # Write Top 100 to Excel
-            pareto_df.head(100).to_excel(writer, sheet_name='Pareto', index=False)
+            # --- PART A: SUMMARY TABLE (Store Level Metrics) ---
+            ws_pareto.write('A1', 'STORE PARETO SUMMARY (Based on FTD Sales)', fmt_header)
+            headers = ['Store', 'Total Articles Sold', 'Power SKUs (80% Sales)', 'Tail SKUs (20% Sales)', 'Total FTD Sales', 'Total MTD Sales', 'Total YTD Sales']
+            for c, h in enumerate(headers): ws_pareto.write(2, c, h, fmt_subhead)
             
-            # Add Pareto Chart (Combo Chart)
-            chart_pareto = workbook.add_chart({'type': 'column'})
-            chart_pareto.add_series({
-                'name':       'Sales',
-                'categories': ['Pareto', 1, 0, 20, 0], # Top 20 items
-                'values':     ['Pareto', 1, 1, 20, 1],
-            })
-            # Line for Cumulative %
-            line_chart = workbook.add_chart({'type': 'line'})
-            line_chart.add_series({
-                'name':       'Cumulative %',
-                'categories': ['Pareto', 1, 0, 20, 0],
-                'values':     ['Pareto', 1, 3, 20, 3],
-                'y2_axis':    True,
-            })
-            chart_pareto.combine(line_chart)
-            chart_pareto.set_title({'name': 'Pareto Chart (Top 20 Articles)'})
-            chart_pareto.set_y2_axis({'max': 1, 'name': 'Cumulative %'})
-            writer.sheets['Pareto'].insert_chart('G2', chart_pareto)
+            stores = df['Store'].unique()
+            row_idx = 3
+            pareto_details_list = [] # To store detailed rows for Part B
+            
+            for store in stores:
+                # Filter for Store & Items with Sales > 0 today
+                store_df = df[(df['Store'] == store) & (df['FTD Sale Amt'] > 0)].copy()
+                
+                if store_df.empty: continue
+                
+                # Calculate Pareto
+                store_df = store_df.sort_values(by='FTD Sale Amt', ascending=False)
+                total_sales = store_df['FTD Sale Amt'].sum()
+                store_df['Cum_Sales'] = store_df['FTD Sale Amt'].cumsum()
+                store_df['Cum_Pct'] = store_df['Cum_Sales'] / total_sales
+                
+                # Tag Items
+                store_df['Pareto_Class'] = np.where(store_df['Cum_Pct'] <= 0.80, 'A (Top 80%)', 'B (Tail 20%)')
+                
+                # Counts
+                total_articles = len(store_df)
+                power_skus = len(store_df[store_df['Pareto_Class'] == 'A (Top 80%)'])
+                tail_skus = total_articles - power_skus
+                
+                # Sales Totals
+                ftd_val = store_df['FTD Sale Amt'].sum()
+                mtd_val = store_df['MTD Sale Amt'].sum()
+                ytd_val = store_df['YTD Sale Amt'].sum()
+                
+                # Write Summary Row
+                ws_pareto.write(row_idx, 0, store)
+                ws_pareto.write(row_idx, 1, total_articles, fmt_number)
+                ws_pareto.write(row_idx, 2, power_skus, fmt_number)
+                ws_pareto.write(row_idx, 3, tail_skus, fmt_number)
+                ws_pareto.write(row_idx, 4, ftd_val, fmt_currency)
+                ws_pareto.write(row_idx, 5, mtd_val, fmt_currency)
+                ws_pareto.write(row_idx, 6, ytd_val, fmt_currency)
+                
+                row_idx += 1
+                
+                # Save 'Power SKUs' for Part B (Detailed List)
+                power_items = store_df[store_df['Pareto_Class'] == 'A (Top 80%)'][['Store', 'Article UID', 'Article Description', 'FTD Sale Amt', 'Pareto_Class']]
+                pareto_details_list.append(power_items)
+
+            # --- PART B: DETAILED RAW DATA (Power SKUs per Store) ---
+            # Leave some space, then write the detailed list
+            detail_start_row = row_idx + 3
+            ws_pareto.write(detail_start_row, 0, 'DETAILED POWER SKUs (Articles contributing to 80% of Sales today)', fmt_header)
+            
+            if pareto_details_list:
+                full_pareto_df = pd.concat(pareto_details_list)
+                # Write to Excel starting below the summary
+                full_pareto_df.to_excel(writer, sheet_name='Pareto_Analysis', startrow=detail_start_row+1, index=False)
 
         # ----------------------------------------------------
         # SHEET 3: REGIONAL DEEP DIVE (Top Item Analysis)
@@ -443,33 +474,27 @@ def generate_excel_insights_report(df, date_str):
             unique_regions = df['Region'].dropna().unique()
             
             for region in unique_regions:
-                # Header for Region
                 ws_region.write(row_cursor, 0, f"REGION: {region}", fmt_header)
                 row_cursor += 1
                 
-                # Get Top 10 Articles for this Region
                 reg_df = df[df['Region'] == region]
                 top_arts = reg_df.groupby('Article Description')['FTD Sale Amt'].sum().nlargest(10).index.tolist()
                 
-                # Pivot Table: Rows=Article, Cols=Store, Val=Sales
                 subset = reg_df[reg_df['Article Description'].isin(top_arts)]
                 pivot = subset.pivot_table(index='Article Description', columns='Store', values='FTD Sale Amt', aggfunc='sum').fillna(0)
                 
-                # Write Pivot manually to control placement
-                # Write Header Row (Stores)
                 ws_region.write(row_cursor, 0, "Article Description", fmt_header)
                 for c, store_name in enumerate(pivot.columns):
                     ws_region.write(row_cursor, c+1, store_name, fmt_header)
                 row_cursor += 1
                 
-                # Write Data Rows
                 for art_name, row_data in pivot.iterrows():
                     ws_region.write(row_cursor, 0, art_name)
                     for c, val in enumerate(row_data):
                         ws_region.write(row_cursor, c+1, val, fmt_currency)
                     row_cursor += 1
                 
-                row_cursor += 2 # Spacer
+                row_cursor += 2
 
         # ----------------------------------------------------
         # SHEET 4: ACTIONABLES (Urgent / Cash Traps / Margin)
@@ -477,18 +502,15 @@ def generate_excel_insights_report(df, date_str):
         log("      > Building Sheet 4: Actionables...")
         ws_action = workbook.add_worksheet('Actionables')
         
-        # A. URGENT STOCK (Header A1)
         ws_action.write('A1', 'URGENT REORDER (Top 50 Fast Movers)', fmt_header)
         if 'Final Remarks' in df.columns:
             urgent = df[(df['Final Remarks'] == 'Stock Required') & (df['YTD Avg Sales'] > 0)].sort_values('YTD Avg Sales', ascending=False).head(50)
             cols_urg = ['Article UID', 'Article Description', 'Store', 'Day On Hand', 'YTD Avg Sales']
-            # Write data below header
             for c, col in enumerate(cols_urg): ws_action.write(1, c, col)
             for r, row in enumerate(urgent[cols_urg].values):
                 for c, val in enumerate(row):
                     ws_action.write(r+2, c, val)
 
-        # B. CASH TRAPS (Header G1)
         ws_action.write('G1', 'CASH TRAPS (High Value Dead Stock)', fmt_header)
         if 'Day On Hand' in df.columns:
             traps = df[(df['Day On Hand'] > 180) & (df['On Hand Cost'] > 50000)].sort_values('On Hand Cost', ascending=False).head(50)
@@ -498,7 +520,6 @@ def generate_excel_insights_report(df, date_str):
                 for c, val in enumerate(row):
                     ws_action.write(r+2, c+6, val)
 
-        # C. MARGIN BLEED (Header M1)
         ws_action.write('M1', 'MARGIN BLEED (Category Level)', fmt_header)
         cat_col = 'Sub Division_V1' if 'Sub Division_V1' in df.columns else 'Sub Division'
         if cat_col in df.columns and 'MTD IM %' in df.columns:
@@ -517,7 +538,6 @@ def generate_excel_insights_report(df, date_str):
         log("      > Building Sheet 5: Correlations...")
         ws_corr = workbook.add_worksheet('Correlations')
         
-        # A. Vendor Risk
         ws_corr.write('A1', 'TOP VENDORS CAUSING STOCKOUTS', fmt_header)
         if 'Vendor Name' in df.columns:
             vendor_risk = df[df['Final Remarks'] == 'Stock Required'].groupby('Vendor Name')['Article UID'].count().reset_index(name='Stockout Count')
@@ -529,7 +549,6 @@ def generate_excel_insights_report(df, date_str):
                 ws_corr.write(r+2, 0, row[0])
                 ws_corr.write(r+2, 1, row[1])
 
-        # B. Price Impact (GST)
         ws_corr.write('E1', 'GST PRICE IMPACT (Elasticity Proxy)', fmt_header)
         if 'GST_Change' in df.columns and '2024 Avg Sales' in df.columns and 'MTD Qty' in df.columns:
             gst_items = df[df['GST_Change'] == 'Yes'].copy()
