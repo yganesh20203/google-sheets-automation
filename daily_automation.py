@@ -240,6 +240,7 @@ def process_article_sales_report(df, df_hirarchy, df_div, df_instock, df_gst, df
     try:
         # 1. Generate Article UID (Store + Article No)
         if 'Article No' in df.columns and 'Store No' in df.columns:
+            # Safe conversion removing decimals
             s_store = pd.to_numeric(df['Store No'], errors='coerce').fillna(0).astype('int64').astype(str)
             s_article = pd.to_numeric(df['Article No'], errors='coerce').fillna(0).astype('int64').astype(str)
             df.insert(df.columns.get_loc('Article No')+1, 'Article UID', s_store + s_article)
@@ -250,6 +251,8 @@ def process_article_sales_report(df, df_hirarchy, df_div, df_instock, df_gst, df
             df_hirarchy['Location'] = df_hirarchy['Location'].astype(str)
             df = df.merge(df_hirarchy[['Location', 'Market', 'Market Manager']], left_on='Store No', right_on='Location', how='left')
             df.rename(columns={'Market': 'Region'}, inplace=True)
+            # FIX: Explicitly drop 'Location' immediately after merge to prevent it appearing at the end
+            df.drop(columns=['Location'], inplace=True, errors='ignore')
 
         # 3. Merge Division V1
         if df_div is not None and 'Sub Division' in df.columns:
