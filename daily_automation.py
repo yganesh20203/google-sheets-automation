@@ -228,9 +228,7 @@ def process_lmtd_logic(df_lmtd, calc_date):
     if df_lmtd is None: return None
     log("    > Calculating LMTD Sales from December data...")
     try:
-        # 1. Create Key
         if 'STORE_NBR' in df_lmtd.columns and 'ITEM_NUMBER' in df_lmtd.columns:
-            # Convert to numeric first to remove decimals, then to string
             s_store = pd.to_numeric(df_lmtd['STORE_NBR'], errors='coerce').fillna(0).astype('int64').astype(str)
             s_item = pd.to_numeric(df_lmtd['ITEM_NUMBER'], errors='coerce').fillna(0).astype('int64').astype(str)
             df_lmtd['LMTD_Key'] = s_store + s_item
@@ -238,20 +236,16 @@ def process_lmtd_logic(df_lmtd, calc_date):
             log("    [ERROR] STORE_NBR or ITEM_NUMBER missing in Dec Sales file.")
             return None
 
-        # 2. Determine Columns to Sum (Sales_December_01 to Sales_December_{day})
-        day_limit = calc_date.day # This is yesterday's day number (e.g. 12)
-        
+        day_limit = calc_date.day 
         cols_to_sum = []
         for d in range(1, day_limit + 1):
-            col_name = f"Sales_December_{d:02d}" # Formats 1 as '01', 12 as '12'
+            col_name = f"Sales_December_{d:02d}"
             if col_name in df_lmtd.columns:
                 cols_to_sum.append(col_name)
         
         if not cols_to_sum:
-            log("    [WARN] No matching date columns found in Dec Sales file.")
             df_lmtd['LMTD Sales'] = 0
         else:
-            # 3. Calculate Sum
             df_lmtd['LMTD Sales'] = df_lmtd[cols_to_sum].apply(pd.to_numeric, errors='coerce').sum(axis=1)
 
         return df_lmtd[['LMTD_Key', 'LMTD Sales']]
@@ -260,14 +254,48 @@ def process_lmtd_logic(df_lmtd, calc_date):
         log(f"    [ERROR] LMTD Calculation failed: {e}")
         return None
 
-def process_article_sales_report(df, df_hirarchy, df_div, df_instock, df_gst, df_ytd, df_lmtd, calc_date):
+def process_lytd_logic(df_lytd, calc_date):
+    """
+    Calculates LYTD Sales by summing columns Sales_Jan_01 to Sales_Jan_{yesterday}.
+    Creates a key: STORE_NBR + ITEM_NUMBER.
+    """
+    if df_lytd is None: return None
+    log("    > Calculating LYTD Sales from Jan 2025 data...")
+    try:
+        # 1. Create Key
+        if 'STORE_NBR' in df_lytd.columns and 'ITEM_NUMBER' in df_lytd.columns:
+            s_store = pd.to_numeric(df_lytd['STORE_NBR'], errors='coerce').fillna(0).astype('int64').astype(str)
+            s_item = pd.to_numeric(df_lytd['ITEM_NUMBER'], errors='coerce').fillna(0).astype('int64').astype(str)
+            df_lytd['LYTD_Key'] = s_store + s_item
+        else:
+            log("    [ERROR] STORE_NBR or ITEM_NUMBER missing in Jan 2025 Sales file.")
+            return None
+
+        # 2. Determine Columns to Sum (Sales_Jan_01 to Sales_Jan_{day})
+        day_limit = calc_date.day 
+        cols_to_sum = []
+        for d in range(1, day_limit + 1):
+            col_name = f"Sales_Jan_{d:02d}" # Matches Sales_Jan_02, Sales_Jan_13 etc.
+            if col_name in df_lytd.columns:
+                cols_to_sum.append(col_name)
+        
+        if not cols_to_sum:
+            log("    [WARN] No matching date columns found in Jan 2025 Sales file.")
+            df_lytd['LYTD Sales'] = 0
+        else:
+            # 3. Calculate Sum
+            df_lytd['LYTD Sales'] = df_lytd[cols_to_sum].apply(pd.to_numeric, errors='coerce').sum(axis=1)
+
+        return df_lytd[['LYTD_Key', 'LYTD Sales']]
+
+    except Exception as e:
+        log(f"    [ERROR] LYTD Calculation failed: {e}")
+        return None
+
+def process_article_sales_report(df, df_hirarchy, df_div, df_instock, df_gst, df_ytd, df_lmtd, df_lytd, calc_date):
     """The Master Transformation Function."""
     log("    > Processing Article Sales Report (Transformation Pipeline)...")
     if df is None: return None
-    
-    current_year = calc_date.year + 1 # Assuming calc_date is yesterday, and we are processing for current year context
-    # Adjust context: If running in Jan 2026, current_year is 2026.
-    # Actually, let's derive years from the YTD columns present.
     
     try:
         # 1. Generate Article UID (Store + Article No)
@@ -305,7 +333,7 @@ def process_article_sales_report(df, df_hirarchy, df_div, df_instock, df_gst, df
             df['GST_Change'] = df['GST_Change'].fillna('')
             df.drop(columns=['UID'], inplace=True, errors='ignore')
 
-        # 6. Merge Historical YTD Sales & Create LYTD Sales
+        # 6. Merge Historical YTD Sales
         if df_ytd is not None and 'Article UID' in df.columns:
             df['Article UID'] = df['Article UID'].astype(str).str.replace(r'\.0$', '', regex=True)
             df_ytd['Article UID'] = pd.to_numeric(df_ytd['Article UID'], errors='coerce').fillna(-1).astype('int64').astype(str)
@@ -313,22 +341,19 @@ def process_article_sales_report(df, df_hirarchy, df_div, df_instock, df_gst, df
             ytd_cols = [c for c in ['Article UID', '2021 YTD Sales', '2022 YTD Sales', '2023 YTD Sales', '2024 YTD Sales', '2025 YTD Sales'] if c in df_ytd.columns]
             df = df.merge(df_ytd[ytd_cols], on='Article UID', how='left')
 
-            # --- NEW LOGIC: LYTD SALES ---
-            # Mapping "Last Year Sales" based on current year context. 
-            # If we are in 2026, Last Year is 2025. We map '2025 YTD Sales' to 'LYTD Sales'.
-            prev_year_col = f"{calc_date.year} YTD Sales" # e.g. 2025 YTD Sales
-            if prev_year_col in df.columns:
-                df['LYTD Sales'] = df[prev_year_col]
-            else:
-                df['LYTD Sales'] = 0
-
-        # 7. Merge LMTD Sales (NEW)
+        # 7. Merge LMTD Sales
         if df_lmtd is not None and 'Article UID' in df.columns:
              df = df.merge(df_lmtd, left_on='Article UID', right_on='LMTD_Key', how='left')
              df['LMTD Sales'] = df['LMTD Sales'].fillna(0)
              df.drop(columns=['LMTD_Key'], inplace=True, errors='ignore')
 
-        # 8. Calculate Average Sales & Day On Hand
+        # 8. Merge LYTD Sales (NEW)
+        if df_lytd is not None and 'Article UID' in df.columns:
+             df = df.merge(df_lytd, left_on='Article UID', right_on='LYTD_Key', how='left')
+             df['LYTD Sales'] = df['LYTD Sales'].fillna(0)
+             df.drop(columns=['LYTD_Key'], inplace=True, errors='ignore')
+
+        # 9. Calculate Average Sales & Day On Hand
         day_of_year = calc_date.timetuple().tm_yday
         if day_of_year > 0:
             sales_cols = ['YTD Sale Amt', '2021 YTD Sales', '2022 YTD Sales', '2023 YTD Sales', '2024 YTD Sales', '2025 YTD Sales']
@@ -347,7 +372,7 @@ def process_article_sales_report(df, df_hirarchy, df_div, df_instock, df_gst, df
                 choices = ['Price Support Required', 'Stock Required']
                 df['Final Remarks'] = np.select(conditions, choices, default='')
 
-        # 9. Clean up columns & Filters
+        # 10. Clean up columns & Filters
         cols_drop = ['WEEK4_COST', 'WEEK4_QTY', 'WEEEK4_Sales', 'WEEK4_Sales']
         df.drop(columns=[c for c in cols_drop if c in df.columns], inplace=True)
 
@@ -358,7 +383,7 @@ def process_article_sales_report(df, df_hirarchy, df_div, df_instock, df_gst, df
         if 'Store' in df.columns: 
             df = df[df['Store'].astype(str).str.strip().str.lower() != 'lucknow fc']
 
-        # 10. REORDER COLUMNS (Updated with LMTD and LYTD)
+        # 11. REORDER COLUMNS
         desired_order = [
             "Article No", "Article UID", "Store No", "Store", "Region", "Market Manager",
             "Article Description", "Brand Name", "Article Type", "PB_FLAG", "Base Unit of Measurement",
@@ -396,7 +421,7 @@ def generate_excel_insights_report(df, date_str):
     
     output = BytesIO()
     
-    # Ensure numerics for new columns
+    # Ensure numerics
     numeric_cols = ['YTD Sale Amt', 'FTD Sale Amt', 'On Hand Cost', 'YTD Avg Sales', 'Day On Hand', 'MTD Sale Amt', 'LMTD Sales', 'LYTD Sales']
     for col in numeric_cols:
         if col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
@@ -411,21 +436,22 @@ def generate_excel_insights_report(df, date_str):
         fmt_number = workbook.add_format({'num_format': '#,##0'})
         fmt_pct = workbook.add_format({'num_format': '0.0%'})
         
-        #  - Placeholder for concept
         # --- SHEET 1: DASHBOARD ---
         ws_dash = workbook.add_worksheet('Dashboard')
         
         total_ftd = df['FTD Sale Amt'].sum() if 'FTD Sale Amt' in df.columns else 0
         total_ytd = df['YTD Sale Amt'].sum() if 'YTD Sale Amt' in df.columns else 0
         total_inv = df['On Hand Cost'].sum() if 'On Hand Cost' in df.columns else 0
-        total_lmtd = df['LMTD Sales'].sum() if 'LMTD Sales' in df.columns else 0 # Added to Dashboard
+        total_lmtd = df['LMTD Sales'].sum() if 'LMTD Sales' in df.columns else 0
+        total_lytd = df['LYTD Sales'].sum() if 'LYTD Sales' in df.columns else 0
         efficiency = (total_ytd / total_inv) if total_inv > 0 else 0
         
         data_kpi = [
             ['KPI Metric', 'Value'],
             ['Total FTD Sales (Today)', total_ftd],
             ['Total YTD Sales', total_ytd],
-            ['Total LMTD Sales (Last Month)', total_lmtd],
+            ['Total LMTD Sales', total_lmtd],
+            ['Total LYTD Sales', total_lytd],
             ['Total Inventory Value', total_inv],
             ['Capital Efficiency Ratio', efficiency]
         ]
@@ -434,11 +460,10 @@ def generate_excel_insights_report(df, date_str):
         
         for i, row in enumerate(data_kpi):
             fmt = fmt_header if i == 0 else fmt_currency
-            if i == 5: fmt = workbook.add_format({'num_format': '0.00'}) 
+            if i == 6: fmt = workbook.add_format({'num_format': '0.00'}) 
             ws_dash.write(4 + i, 1, row[0], fmt)
             ws_dash.write(4 + i, 2, row[1], fmt)
 
-        # Chart logic remains same...
         if 'Store' in df.columns and 'FTD Sale Amt' in df.columns:
             top_stores = df.groupby('Store')['FTD Sale Amt'].sum().nlargest(10).reset_index()
             top_stores.to_excel(writer, sheet_name='Dashboard', startrow=12, startcol=1, index=False)
@@ -452,10 +477,6 @@ def generate_excel_insights_report(df, date_str):
             })
             chart_col.set_title({'name': 'Top 10 Stores (Today\'s Sales)'})
             ws_dash.insert_chart('E5', chart_col)
-
-        # --- SHEET 2-5: OTHER SHEETS (Same as original, removed for brevity but they exist) ---
-        # Note: If you need specific changes in Pareto or Deep Dive to use LMTD, add them here.
-        # For now, sticking to original logic for other sheets.
 
     output.seek(0)
     return output
@@ -487,8 +508,9 @@ def check_and_copy_files(drive_service):
     df_gst = download_csv_to_df(drive_service, 'gst_change_list.csv', TARGET_FOLDER_ID)
     df_ytd = download_csv_to_df(drive_service, 'ytd_sales.csv', TARGET_FOLDER_ID)
     
-    # Download LMTD Source Data
+    # Download LMTD & LYTD Source Data
     df_lmtd_raw = download_csv_to_df(drive_service, '2025_dec_sales.csv', TARGET_FOLDER_ID)
+    df_lytd_raw = download_csv_to_df(drive_service, '2025_jan_sales.csv', TARGET_FOLDER_ID)
 
     # 2. Date Fallback Logic
     log("\n--- Phase 2: Locating Source Files ---")
@@ -515,15 +537,15 @@ def check_and_copy_files(drive_service):
     df_article = load_file_to_df(drive_service, file_info['ArticleSalesReport'][0], file_info['ArticleSalesReport'][1])
     df_instock = load_file_to_df(drive_service, file_info['Overall_Instock'][0], file_info['Overall_Instock'][1])
     
-    # Process Instock
+    # Process Helpers
     df_instock = process_overall_instock(df_instock)
-    
-    # Process LMTD
     df_lmtd_clean = process_lmtd_logic(df_lmtd_raw, calc_date)
+    df_lytd_clean = process_lytd_logic(df_lytd_raw, calc_date)
     
     # Process Main Article Report
     df_final = process_article_sales_report(
-        df_article, df_hirarchy, df_div, df_instock, df_gst, df_ytd, df_lmtd_clean, calc_date
+        df_article, df_hirarchy, df_div, df_instock, df_gst, df_ytd, 
+        df_lmtd_clean, df_lytd_clean, calc_date
     )
     
     # 4. Generate Outputs
@@ -553,7 +575,7 @@ def check_and_copy_files(drive_service):
             drive_service.files().copy(fileId=f_id, body={'name': f_name, 'parents': [TARGET_FOLDER_ID]}).execute()
             
     log("  Cleaning up memory...")
-    del df_article, df_instock, df_final, df_hirarchy, df_div, df_gst, df_ytd, df_lmtd_raw
+    del df_article, df_instock, df_final, df_hirarchy, df_div, df_gst, df_ytd, df_lmtd_raw, df_lytd_raw
     gc.collect()
     
     log("\n=== SUCCESS: Pipeline Completed Successfully ===")
