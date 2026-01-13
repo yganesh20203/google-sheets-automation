@@ -1,3 +1,6 @@
+# ==============================================================================
+# AUTOMATED BUSINESS INTELLIGENCE ENGINE (GOOGLE DRIVE + ADVANCED EXCEL REPORTING)
+# ==============================================================================
 
 import datetime
 import zipfile
@@ -275,7 +278,7 @@ def process_lytd_logic(df_lytd, calc_date):
         day_limit = calc_date.day 
         cols_to_sum = []
         for d in range(1, day_limit + 1):
-            col_name = f"Sales_Jan_{d:02d}" # Matches Sales_Jan_02, Sales_Jan_13 etc.
+            col_name = f"Sales_Jan_{d:02d}" 
             if col_name in df_lytd.columns:
                 cols_to_sum.append(col_name)
         
@@ -347,7 +350,7 @@ def process_article_sales_report(df, df_hirarchy, df_div, df_instock, df_gst, df
              df['LMTD Sales'] = df['LMTD Sales'].fillna(0)
              df.drop(columns=['LMTD_Key'], inplace=True, errors='ignore')
 
-        # 8. Merge LYTD Sales (NEW)
+        # 8. Merge LYTD Sales
         if df_lytd is not None and 'Article UID' in df.columns:
              df = df.merge(df_lytd, left_on='Article UID', right_on='LYTD_Key', how='left')
              df['LYTD Sales'] = df['LYTD Sales'].fillna(0)
@@ -416,13 +419,17 @@ def process_article_sales_report(df, df_hirarchy, df_div, df_instock, df_gst, df
 # ==============================================================================
 
 def generate_excel_insights_report(df, date_str):
-    """Generates Excel report with Charts."""
+    """
+    Generates a sophisticated Excel report with Charts, Store-Level Pareto Analysis,
+    and Drill-Downs using XlsxWriter.
+    """
     log("    > Spinning up Intelligence Engine (Excel Generation)...")
     
     output = BytesIO()
     
-    # Ensure numerics
-    numeric_cols = ['YTD Sale Amt', 'FTD Sale Amt', 'On Hand Cost', 'YTD Avg Sales', 'Day On Hand', 'MTD Sale Amt', 'LMTD Sales', 'LYTD Sales']
+    # Force Numeric for Calculations
+    numeric_cols = ['YTD Sale Amt', 'FTD Sale Amt', 'On Hand Cost', 'YTD Avg Sales', 
+                    'Day On Hand', 'MTD Sale Amt', 'LMTD Sales', 'LYTD Sales']
     for col in numeric_cols:
         if col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
@@ -436,7 +443,9 @@ def generate_excel_insights_report(df, date_str):
         fmt_number = workbook.add_format({'num_format': '#,##0'})
         fmt_pct = workbook.add_format({'num_format': '0.0%'})
         
-        # --- SHEET 1: DASHBOARD ---
+        # ----------------------------------------------------
+        # SHEET 1: DASHBOARD
+        # ----------------------------------------------------
         ws_dash = workbook.add_worksheet('Dashboard')
         
         total_ftd = df['FTD Sale Amt'].sum() if 'FTD Sale Amt' in df.columns else 0
@@ -477,6 +486,163 @@ def generate_excel_insights_report(df, date_str):
             })
             chart_col.set_title({'name': 'Top 10 Stores (Today\'s Sales)'})
             ws_dash.insert_chart('E5', chart_col)
+
+        # ----------------------------------------------------
+        # SHEET 2: STORE-LEVEL PARETO
+        # ----------------------------------------------------
+        ws_pareto = workbook.add_worksheet('Pareto_Analysis')
+        
+        if 'Store' in df.columns and 'FTD Sale Amt' in df.columns and 'Article Description' in df.columns:
+            ws_pareto.write('A1', 'STORE PARETO SUMMARY (Based on FTD Sales)', fmt_header)
+            headers = ['Store', 'Total Articles Sold', 'Power SKUs (80% Sales)', 'Tail SKUs (20% Sales)', 
+                       'Total FTD Sales', 'Total MTD Sales', 'Total YTD Sales', 'Total LMTD Sales', 'Total LYTD Sales']
+            for c, h in enumerate(headers): ws_pareto.write(2, c, h, fmt_subhead)
+            
+            stores = df['Store'].unique()
+            row_idx = 3
+            pareto_details_list = []
+            
+            for store in stores:
+                store_df = df[(df['Store'] == store) & (df['FTD Sale Amt'] > 0)].copy()
+                if store_df.empty: continue
+                
+                store_df = store_df.sort_values(by='FTD Sale Amt', ascending=False)
+                total_sales = store_df['FTD Sale Amt'].sum()
+                store_df['Cum_Sales'] = store_df['FTD Sale Amt'].cumsum()
+                store_df['Cum_Pct'] = store_df['Cum_Sales'] / total_sales
+                
+                store_df['Pareto_Class'] = np.where(store_df['Cum_Pct'] <= 0.80, 'A (Top 80%)', 'B (Tail 20%)')
+                
+                total_articles = len(store_df)
+                power_skus = len(store_df[store_df['Pareto_Class'] == 'A (Top 80%)'])
+                tail_skus = total_articles - power_skus
+                
+                ftd_val = store_df['FTD Sale Amt'].sum()
+                mtd_val = store_df['MTD Sale Amt'].sum()
+                ytd_val = store_df['YTD Sale Amt'].sum()
+                lmtd_val = store_df['LMTD Sales'].sum() if 'LMTD Sales' in store_df.columns else 0
+                lytd_val = store_df['LYTD Sales'].sum() if 'LYTD Sales' in store_df.columns else 0
+                
+                ws_pareto.write(row_idx, 0, store)
+                ws_pareto.write(row_idx, 1, total_articles, fmt_number)
+                ws_pareto.write(row_idx, 2, power_skus, fmt_number)
+                ws_pareto.write(row_idx, 3, tail_skus, fmt_number)
+                ws_pareto.write(row_idx, 4, ftd_val, fmt_currency)
+                ws_pareto.write(row_idx, 5, mtd_val, fmt_currency)
+                ws_pareto.write(row_idx, 6, ytd_val, fmt_currency)
+                ws_pareto.write(row_idx, 7, lmtd_val, fmt_currency)
+                ws_pareto.write(row_idx, 8, lytd_val, fmt_currency)
+                
+                row_idx += 1
+                
+                power_items = store_df[store_df['Pareto_Class'] == 'A (Top 80%)'][['Store', 'Article UID', 'Article Description', 'FTD Sale Amt', 'Pareto_Class']]
+                pareto_details_list.append(power_items)
+
+            detail_start_row = row_idx + 3
+            ws_pareto.write(detail_start_row, 0, 'DETAILED POWER SKUs (Articles contributing to 80% of Sales today)', fmt_header)
+            
+            if pareto_details_list:
+                full_pareto_df = pd.concat(pareto_details_list)
+                full_pareto_df.to_excel(writer, sheet_name='Pareto_Analysis', startrow=detail_start_row+1, index=False)
+
+        # ----------------------------------------------------
+        # SHEET 3: REGIONAL DEEP DIVE
+        # ----------------------------------------------------
+        if 'Region' in df.columns and 'Store' in df.columns:
+            ws_region = workbook.add_worksheet('Regional_Deep_Dive')
+            row_cursor = 0
+            unique_regions = df['Region'].dropna().unique()
+            
+            for region in unique_regions:
+                ws_region.write(row_cursor, 0, f"REGION: {region}", fmt_header)
+                row_cursor += 1
+                
+                reg_df = df[df['Region'] == region]
+                top_arts = reg_df.groupby('Article Description')['FTD Sale Amt'].sum().nlargest(10).index.tolist()
+                
+                subset = reg_df[reg_df['Article Description'].isin(top_arts)]
+                pivot = subset.pivot_table(index='Article Description', columns='Store', values='FTD Sale Amt', aggfunc='sum').fillna(0)
+                
+                ws_region.write(row_cursor, 0, "Article Description", fmt_header)
+                for c, store_name in enumerate(pivot.columns):
+                    ws_region.write(row_cursor, c+1, store_name, fmt_header)
+                row_cursor += 1
+                
+                for art_name, row_data in pivot.iterrows():
+                    ws_region.write(row_cursor, 0, art_name)
+                    for c, val in enumerate(row_data):
+                        ws_region.write(row_cursor, c+1, val, fmt_currency)
+                    row_cursor += 1
+                
+                row_cursor += 2
+
+        # ----------------------------------------------------
+        # SHEET 4: ACTIONABLES
+        # ----------------------------------------------------
+        ws_action = workbook.add_worksheet('Actionables')
+        
+        ws_action.write('A1', 'URGENT REORDER (Top 50 Fast Movers)', fmt_header)
+        if 'Final Remarks' in df.columns:
+            urgent = df[(df['Final Remarks'] == 'Stock Required') & (df['YTD Avg Sales'] > 0)].sort_values('YTD Avg Sales', ascending=False).head(50)
+            cols_urg = ['Article UID', 'Article Description', 'Store', 'Day On Hand', 'YTD Avg Sales']
+            for c, col in enumerate(cols_urg): ws_action.write(1, c, col)
+            for r, row in enumerate(urgent[cols_urg].values):
+                for c, val in enumerate(row):
+                    ws_action.write(r+2, c, val)
+
+        ws_action.write('G1', 'CASH TRAPS (High Value Dead Stock)', fmt_header)
+        if 'Day On Hand' in df.columns:
+            traps = df[(df['Day On Hand'] > 180) & (df['On Hand Cost'] > 50000)].sort_values('On Hand Cost', ascending=False).head(50)
+            cols_trap = ['Article UID', 'Article Description', 'Store', 'Day On Hand', 'On Hand Cost']
+            for c, col in enumerate(cols_trap): ws_action.write(1, c+6, col)
+            for r, row in enumerate(traps[cols_trap].values):
+                for c, val in enumerate(row):
+                    ws_action.write(r+2, c+6, val)
+
+        ws_action.write('M1', 'MARGIN BLEED (Category Level)', fmt_header)
+        cat_col = 'Sub Division_V1' if 'Sub Division_V1' in df.columns else 'Sub Division'
+        if cat_col in df.columns and 'MTD IM %' in df.columns:
+            margin = df.groupby(cat_col)[['MTD IM %', 'YTD IM %']].mean()
+            margin['Drop'] = margin['YTD IM %'] - margin['MTD IM %']
+            bleeders = margin[margin['Drop'] > 2].sort_values('Drop', ascending=False).reset_index()
+            cols_marg = [cat_col, 'MTD IM %', 'YTD IM %', 'Drop']
+            for c, col in enumerate(cols_marg): ws_action.write(1, c+12, col)
+            for r, row in enumerate(bleeders[cols_marg].values):
+                for c, val in enumerate(row):
+                    ws_action.write(r+2, c+12, val)
+
+        # ----------------------------------------------------
+        # SHEET 5: CORRELATIONS
+        # ----------------------------------------------------
+        ws_corr = workbook.add_worksheet('Correlations')
+        
+        ws_corr.write('A1', 'TOP VENDORS CAUSING STOCKOUTS', fmt_header)
+        if 'Vendor Name' in df.columns:
+            vendor_risk = df[df['Final Remarks'] == 'Stock Required'].groupby('Vendor Name')['Article UID'].count().reset_index(name='Stockout Count')
+            vendor_risk = vendor_risk.sort_values('Stockout Count', ascending=False).head(20)
+            
+            ws_corr.write(1, 0, 'Vendor Name')
+            ws_corr.write(1, 1, 'Stockout Count')
+            for r, row in enumerate(vendor_risk.values):
+                ws_corr.write(r+2, 0, row[0])
+                ws_corr.write(r+2, 1, row[1])
+
+        ws_corr.write('E1', 'GST PRICE IMPACT (Elasticity Proxy)', fmt_header)
+        if 'GST_Change' in df.columns and '2024 Avg Sales' in df.columns and 'MTD Qty' in df.columns:
+            gst_items = df[df['GST_Change'] == 'Yes'].copy()
+            if not gst_items.empty and 'Selling Price (With Tax)' in df.columns:
+                gst_items['Est_Pre_Vol'] = gst_items['2024 Avg Sales'] / gst_items['Selling Price (With Tax)'].replace(0, 1)
+                gst_items['Est_Post_Vol'] = gst_items['MTD Qty'] / 30
+                gst_items['Vol Change %'] = ((gst_items['Est_Post_Vol'] - gst_items['Est_Pre_Vol']) / gst_items['Est_Pre_Vol'].replace(0, 1))
+                
+                view = gst_items[['Article Description', 'Selling Price (With Tax)', 'Vol Change %']].head(50)
+                
+                cols_gst = ['Article Description', 'Price', 'Vol Change %']
+                for c, col in enumerate(cols_gst): ws_corr.write(1, c+4, col)
+                for r, row in enumerate(view.values):
+                    ws_corr.write(r+2, 4, row[0])
+                    ws_corr.write(r+2, 5, row[1])
+                    ws_corr.write(r+2, 6, row[2], fmt_pct)
 
     output.seek(0)
     return output
