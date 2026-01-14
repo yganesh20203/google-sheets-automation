@@ -433,7 +433,8 @@ def generate_excel_insights_report(df, date_str):
     for col in numeric_cols:
         if col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+    # --- FIX APPLIED HERE: Added options to handle NaN/Inf gracefully ---
+    with pd.ExcelWriter(output, engine='xlsxwriter', engine_kwargs={'options': {'nan_inf_to_errors': True}}) as writer:
         workbook = writer.book
         
         # Styles
@@ -634,6 +635,9 @@ def generate_excel_insights_report(df, date_str):
                 gst_items['Est_Pre_Vol'] = gst_items['2024 Avg Sales'] / gst_items['Selling Price (With Tax)'].replace(0, 1)
                 gst_items['Est_Post_Vol'] = gst_items['MTD Qty'] / 30
                 gst_items['Vol Change %'] = ((gst_items['Est_Post_Vol'] - gst_items['Est_Pre_Vol']) / gst_items['Est_Pre_Vol'].replace(0, 1))
+                
+                # Fill NANs here to be safe, although engine option handles it too
+                gst_items['Vol Change %'] = gst_items['Vol Change %'].fillna(0)
                 
                 view = gst_items[['Article Description', 'Selling Price (With Tax)', 'Vol Change %']].head(50)
                 
