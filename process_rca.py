@@ -1,10 +1,10 @@
 import os
 import json
 import duckdb
+import pandas as pd
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
-from googleapiclient.errors import HttpError
 import io
 
 # ==========================================
@@ -15,28 +15,31 @@ creds = service_account.Credentials.from_service_account_info(creds_info)
 drive_service = build('drive', 'v3', credentials=creds)
 
 # ENV VARIABLES
-REQUEST_ID = os.environ['REQUEST_ID']
-INPUT_FILE_ID = os.environ['INPUT_FILE_ID']
-FOLDER_ID = "1pjsuzA9bmQdltnvf21vZ0U4bZ75fUyWt" 
+REQUEST_ID = os.environ.get('REQUEST_ID', 'unknown_id')
+INPUT_FILE_ID = os.environ.get('INPUT_FILE_ID', '')
+# HARDCODE YOUR FOLDER ID HERE
+FOLDER_ID = "1pjsuzA9bmQdltnvf21vZ0U4bZ75fUyWt"
 
 def download_file(file_id, output_path):
     try:
+        if not file_id: return False
         request = drive_service.files().get_media(fileId=file_id)
         fh = io.FileIO(output_path, 'wb')
         downloader = MediaIoBaseDownload(fh, request)
         done = False
-        while done is False:
-            status, done = downloader.next_chunk()
-    except HttpError as e:
+        while done is False: status, done = downloader.next_chunk()
+        return True
+    except Exception as e:
         print(f"Error downloading {file_id}: {e}")
-        if 'fileNotDownloadable' in str(e):
-             print("Skipping file (Google Sheet/Doc).")
+        return False
 
 def upload_file(filename, content_dict):
-    file_metadata = {'name': filename, 'parents': [FOLDER_ID]}
-    media = MediaIoBaseUpload(io.BytesIO(json.dumps(content_dict).encode('utf-8')),
-                              mimetype='application/json')
-    drive_service.files().create(body=file_metadata, media_body=media).execute()
+    try:
+        file_metadata = {'name': filename, 'parents': [FOLDER_ID]}
+        media = MediaIoBaseUpload(io.BytesIO(json.dumps(content_dict).encode('utf-8')), mimetype='application/json')
+        drive_service.files().create(body=file_metadata, media_body=media).execute()
+    except Exception as e:
+        print(f"Upload failed: {e}")
 
 # ==========================================
 # 2. MAIN LOGIC
@@ -44,65 +47,55 @@ def upload_file(filename, content_dict):
 con = duckdb.connect(database=':memory:')
 print(f"Processing Request: {REQUEST_ID}")
 
-# A. Download and Sanitize User Input
+# --- A. LOAD USER INPUT (Using Pandas for Safety) ---
 print(f"Downloading Input File ID: {INPUT_FILE_ID}...")
-download_file(INPUT_FILE_ID, 'raw_input.json')
-
-# SANITIZATION STEP:
-# We read the file in Python first to ensure it's a clean list of objects
-# This fixes issues where GAS might add invisible characters or formatting
-try:
-    with open('raw_input.json', 'r') as f:
-        raw_data = json.load(f)
-    
-    # Ensure it's a list (if it's a single object, wrap it)
-    if isinstance(raw_data, dict):
-        raw_data = [raw_data]
+if download_file(INPUT_FILE_ID, 'user_input.json'):
+    try:
+        # Load JSON with Python first to handle formatting issues
+        with open('user_input.json', 'r') as f:
+            raw = json.load(f)
         
-    # Write back a perfectly clean JSON file for DuckDB
-    with open('user_input.json', 'w') as f:
-        json.dump(raw_data, f)
+        # Ensure it's a list
+        if isinstance(raw, dict): raw = [raw]
+            
+        # Create DataFrame and Register to DuckDB
+        df = pd.DataFrame(raw)
+        # Normalize column names (lowercase, strip spaces) to avoid matching errors
+        df.columns = [x.strip().lower() for x in df.columns]
         
-except Exception as e:
-    print(f"JSON Parsing Error: {e}")
-    # Create empty file to prevent crash
-    with open('user_input.json', 'w') as f: f.write('[]')
+        print(f"User Data Loaded. Columns: {list(df.columns)}")
+        con.register('user_data', df)
+    except Exception as e:
+        print(f"Input Error: {e}")
+        con.execute("CREATE TABLE user_data (mem_nbr VARCHAR)") # Fallback
+else:
+    print("Input download failed.")
+    con.execute("CREATE TABLE user_data (mem_nbr VARCHAR)") # Fallback
 
-# B. Load into DuckDB (STRICT MODE)
-# We use format='array' to force DuckDB to unpack the columns
-try:
-    con.execute("CREATE TABLE user_data AS SELECT * FROM read_json('user_input.json', format='array')")
-    
-    # DEBUG: Print columns to log to be sure
-    print("User Data Columns Found:", con.execute("DESCRIBE user_data").fetchall())
-    
-except Exception as e:
-    print(f"DuckDB Loading Error: {e}")
-    # Fallback: Create empty table with expected column if loading failed
-    con.execute("CREATE TABLE user_data (mem_nbr VARCHAR)")
-
-# C. Download Master Files
+# --- B. LOAD MASTER FILES (Using DuckDB for Speed) ---
 print("Looking for CSV files in folder...")
-results = drive_service.files().list(
-    q=f"'{FOLDER_ID}' in parents and mimeType='text/csv' and trashed=false",
-    fields="files(id, name)").execute()
-
-files = results.get('files', [])
+try:
+    results = drive_service.files().list(
+        q=f"'{FOLDER_ID}' in parents and mimeType='text/csv' and trashed=false",
+        fields="files(id, name)").execute()
+    files = results.get('files', [])
+except: files = []
 
 if not files:
-    print("WARNING: No CSV files found!")
+    print("WARNING: No CSV files found.")
 else:
     print(f"Found {len(files)} CSV files. Downloading...")
     for item in files:
         safe_name = item['name'].replace(" ", "_")
-        print(f"Downloading {safe_name}...")
         download_file(item['id'], safe_name)
 
 # ==========================================
-# 3. ANALYSIS
+# 3. ANALYSIS QUERY
 # ==========================================
 print("Running Analysis...")
 
+# SQL: Join Pandas Table (user_data) with DuckDB CSVs
+# Note: I used 'LOWER' to ensure case-insensitive matching on the Header
 sql_query = """
     SELECT 
         u.mem_nbr AS User_ID,
@@ -112,46 +105,32 @@ sql_query = """
       ON CAST(u.mem_nbr AS VARCHAR) = CAST(m."Membership_NBR" AS VARCHAR)
 """
 
+rca_text = ""
+summary_data = []
+
 try:
     if files:
+        # Check if 'mem_nbr' exists in input (case insensitive check)
+        # We forced columns to lower case earlier in Pandas step
         matches_df = con.execute(sql_query).fetchdf()
         
         if len(matches_df) > 0:
             found_files = matches_df['Found_In_File'].unique().tolist()
-            rca_text = f"Found Member ID in: {', '.join(found_files)}"
+            rca_text = f"Success! Found in: {', '.join(found_files)}"
         else:
-            rca_text = "Member ID not found in any CSV file."
+            rca_text = "Member ID not found in any master file."
         
         summary_data = matches_df.to_dict(orient='records')
     else:
-        rca_text = "Error: No CSV master files found."
-        summary_data = []
+        rca_text = "Analysis Failed: No Master CSV files found."
 
 except Exception as e:
-    # Improved Error Logging
     rca_text = f"Error during query: {str(e)}"
-    print("Detailed Error:", rca_text)
-    
-    # Check if 'mem_nbr' exists in user_data to give a better hint
-    try:
-        cols = [x[0] for x in con.execute("DESCRIBE user_data").fetchall()]
-        if 'mem_nbr' not in cols:
-            rca_text += f" (Debug: user_data table only has columns: {cols})"
-    except:
-        pass
-        
-    summary_data = []
+    print(rca_text)
 
 # ==========================================
 # 4. UPLOAD RESULT
 # ==========================================
-result_payload = {
-    "request_id": REQUEST_ID,
-    "rca_text": rca_text,
-    "summary": summary_data
-}
-
-output_filename = f"result_{REQUEST_ID}.json"
-print(f"Uploading {output_filename}...")
-upload_file(output_filename, result_payload)
+result_payload = {"request_id": REQUEST_ID, "rca_text": rca_text, "summary": summary_data}
+upload_file(f"result_{REQUEST_ID}.json", result_payload)
 print("Done.")
