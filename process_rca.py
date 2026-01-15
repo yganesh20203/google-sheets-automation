@@ -17,9 +17,6 @@ drive_service = build('drive', 'v3', credentials=creds)
 # ENV VARIABLES
 REQUEST_ID = os.environ['REQUEST_ID']
 INPUT_FILE_ID = os.environ['INPUT_FILE_ID']
-
-# *** CRITICAL FIX: HARDCODED FOLDER ID ***
-# This is the ID from your screenshot URL
 FOLDER_ID = "1pjsuzA9bmQdltnvf21vZ0U4bZ75fUyWt" 
 
 def download_file(file_id, output_path):
@@ -32,9 +29,8 @@ def download_file(file_id, output_path):
             status, done = downloader.next_chunk()
     except HttpError as e:
         print(f"Error downloading {file_id}: {e}")
-        # If it's a Google Doc/Sheet, we can't download it as binary.
         if 'fileNotDownloadable' in str(e):
-             print("Skipping file (It might be a Google Sheet/Doc, not a CSV/JSON).")
+             print("Skipping file (Google Sheet/Doc).")
 
 def upload_file(filename, content_dict):
     file_metadata = {'name': filename, 'parents': [FOLDER_ID]}
@@ -46,25 +42,46 @@ def upload_file(filename, content_dict):
 # 2. MAIN LOGIC
 # ==========================================
 con = duckdb.connect(database=':memory:')
-
 print(f"Processing Request: {REQUEST_ID}")
 
-# A. Download User Input (The JSON file)
+# A. Download and Sanitize User Input
 print(f"Downloading Input File ID: {INPUT_FILE_ID}...")
-download_file(INPUT_FILE_ID, 'user_input.json')
+download_file(INPUT_FILE_ID, 'raw_input.json')
 
-# Check if file exists before proceeding
-if not os.path.exists('user_input.json'):
-    # Create a dummy file if download failed just to prevent crash, but log error
-    print("CRITICAL ERROR: Input file failed to download. Check the File ID.")
+# SANITIZATION STEP:
+# We read the file in Python first to ensure it's a clean list of objects
+# This fixes issues where GAS might add invisible characters or formatting
+try:
+    with open('raw_input.json', 'r') as f:
+        raw_data = json.load(f)
+    
+    # Ensure it's a list (if it's a single object, wrap it)
+    if isinstance(raw_data, dict):
+        raw_data = [raw_data]
+        
+    # Write back a perfectly clean JSON file for DuckDB
+    with open('user_input.json', 'w') as f:
+        json.dump(raw_data, f)
+        
+except Exception as e:
+    print(f"JSON Parsing Error: {e}")
+    # Create empty file to prevent crash
     with open('user_input.json', 'w') as f: f.write('[]')
 
+# B. Load into DuckDB (STRICT MODE)
+# We use format='array' to force DuckDB to unpack the columns
 try:
-    con.execute("CREATE TABLE user_data AS SELECT * FROM read_json_auto('user_input.json')")
+    con.execute("CREATE TABLE user_data AS SELECT * FROM read_json('user_input.json', format='array')")
+    
+    # DEBUG: Print columns to log to be sure
+    print("User Data Columns Found:", con.execute("DESCRIBE user_data").fetchall())
+    
 except Exception as e:
-    print(f"Error reading input JSON: {e}")
+    print(f"DuckDB Loading Error: {e}")
+    # Fallback: Create empty table with expected column if loading failed
+    con.execute("CREATE TABLE user_data (mem_nbr VARCHAR)")
 
-# B. Download Master Files (CSVs)
+# C. Download Master Files
 print("Looking for CSV files in folder...")
 results = drive_service.files().list(
     q=f"'{FOLDER_ID}' in parents and mimeType='text/csv' and trashed=false",
@@ -73,11 +90,10 @@ results = drive_service.files().list(
 files = results.get('files', [])
 
 if not files:
-    print("WARNING: No CSV files found! (If your files are .xlsb, please convert at least one to CSV for testing)")
+    print("WARNING: No CSV files found!")
 else:
     print(f"Found {len(files)} CSV files. Downloading...")
     for item in files:
-        # Replace spaces to prevent SQL errors
         safe_name = item['name'].replace(" ", "_")
         print(f"Downloading {safe_name}...")
         download_file(item['id'], safe_name)
@@ -87,8 +103,6 @@ else:
 # ==========================================
 print("Running Analysis...")
 
-# This query looks for the 'mem_nbr' from user_input inside ALL downloaded CSVs
-# Note: Ensure your CSV column header matches 'Membership_NBR' exactly.
 sql_query = """
     SELECT 
         u.mem_nbr AS User_ID,
@@ -99,7 +113,6 @@ sql_query = """
 """
 
 try:
-    # Only run if we actually downloaded CSVs
     if files:
         matches_df = con.execute(sql_query).fetchdf()
         
@@ -111,13 +124,23 @@ try:
         
         summary_data = matches_df.to_dict(orient='records')
     else:
-        rca_text = "Error: No CSV master files were found to check against."
+        rca_text = "Error: No CSV master files found."
         summary_data = []
 
 except Exception as e:
+    # Improved Error Logging
     rca_text = f"Error during query: {str(e)}"
+    print("Detailed Error:", rca_text)
+    
+    # Check if 'mem_nbr' exists in user_data to give a better hint
+    try:
+        cols = [x[0] for x in con.execute("DESCRIBE user_data").fetchall()]
+        if 'mem_nbr' not in cols:
+            rca_text += f" (Debug: user_data table only has columns: {cols})"
+    except:
+        pass
+        
     summary_data = []
-    print(rca_text)
 
 # ==========================================
 # 4. UPLOAD RESULT
