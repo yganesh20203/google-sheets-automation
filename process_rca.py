@@ -4,19 +4,28 @@ import duckdb
 import pandas as pd
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
+from googleapiclient.http import MediaIoBaseDownload
+from googleapiclient.errors import HttpError
 import io
+import time
 
 # ==========================================
 # 1. SETUP & AUTHENTICATION
 # ==========================================
 creds_info = json.loads(os.environ['GCP_SA_KEY'])
 creds = service_account.Credentials.from_service_account_info(creds_info)
-drive_service = build('drive', 'v3', credentials=creds)
 
+# Initialize BOTH Drive and Sheets APIs
+drive_service = build('drive', 'v3', credentials=creds)
+sheets_service = build('sheets', 'v4', credentials=creds)
+
+# ENV VARIABLES
 REQUEST_ID = os.environ.get('REQUEST_ID', 'unknown_id')
 INPUT_FILE_ID = os.environ.get('INPUT_FILE_ID', '')
+SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID', '') # <--- NEW VARIABLE
 FOLDER_ID = "1pjsuzA9bmQdltnvf21vZ0U4bZ75fUyWt"
+RESULTS_TAB_NAME = "Analysis_Results"
+QUEUE_TAB_NAME = "Request_Queue"
 
 def download_file(file_id, output_path):
     try:
@@ -31,13 +40,80 @@ def download_file(file_id, output_path):
         print(f"Error downloading {file_id}: {e}")
         return False
 
-def upload_file(filename, content_dict):
+def write_to_google_sheet(rows, rca_text):
+    """Writes analysis results directly to the Google Sheet"""
     try:
-        file_metadata = {'name': filename, 'parents': [FOLDER_ID]}
-        media = MediaIoBaseUpload(io.BytesIO(json.dumps(content_dict).encode('utf-8')), mimetype='application/json')
-        drive_service.files().create(body=file_metadata, media_body=media).execute()
-    except Exception as e:
-        print(f"Upload failed: {e}")
+        if not SPREADSHEET_ID:
+            print("Error: SPREADSHEET_ID is missing.")
+            return
+
+        print(f"Writing {len(rows)} rows to Sheet ID: {SPREADSHEET_ID}...")
+
+        # 1. Prepare Data Payload for 'Analysis_Results'
+        # Columns: [Request ID, Found In File, Store NBR, Mem NBR, Mem Name, Status, RCA Text]
+        values = []
+        for row in rows:
+            values.append([
+                REQUEST_ID,
+                row.get('Found_In_File', 'N/A'),
+                str(row.get('store_nbr', '')),
+                str(row.get('Membership_NBR', '') or row.get('mem_nbr', '')),
+                row.get('mem_name', ''),
+                "MATCH FOUND",
+                rca_text
+            ])
+        
+        # If no matches, at least write one row with the RCA text
+        if not values:
+            values.append([REQUEST_ID, "N/A", "", "", "", "COMPLETED", rca_text])
+
+        # 2. Append to 'Analysis_Results'
+        body = {'values': values}
+        sheets_service.spreadsheets().values().append(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"{RESULTS_TAB_NAME}!A:A",
+            valueInputOption="USER_ENTERED",
+            body=body
+        ).execute()
+        print("Successfully appended rows to Analysis_Results.")
+
+        # 3. Update Status in 'Request_Queue' to COMPLETED
+        # We need to find the row index first.
+        # Ideally, we read the sheet, find the ID, and update that specific cell.
+        # For simplicity/speed in this script, we assume the GAS script might handle status,
+        # BUT since you want Python to do it, here is the robust way:
+        
+        # A. Read Column B (Request IDs) from Request_Queue
+        result = sheets_service.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID, range=f"{QUEUE_TAB_NAME}!B:B").execute()
+        rows_in_queue = result.get('values', [])
+        
+        # B. Find the Index
+        row_index = -1
+        for i, row_data in enumerate(rows_in_queue):
+            if row_data and row_data[0] == REQUEST_ID:
+                row_index = i + 1 # Sheets are 1-indexed
+                break
+        
+        if row_index != -1:
+            # C. Update Status (Col C) and RCA (Col G)
+            # Col C is index 3, Col G is index 7
+            update_body = {
+                "values": [["COMPLETED", "", "", "", rca_text]] 
+            }
+            # This targets Range C{row}:G{row} (Status...RCA)
+            sheets_service.spreadsheets().values().update(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f"{QUEUE_TAB_NAME}!C{row_index}:G{row_index}",
+                valueInputOption="USER_ENTERED",
+                body=update_body
+            ).execute()
+            print(f"Updated Request_Queue status for Row {row_index}")
+        else:
+            print(f"Warning: Request ID {REQUEST_ID} not found in Queue to update status.")
+
+    except HttpError as e:
+        print(f"Google Sheets API Error: {e}")
 
 # ==========================================
 # 2. MAIN LOGIC
@@ -52,7 +128,6 @@ if download_file(INPUT_FILE_ID, 'user_input.json'):
         with open('user_input.json', 'r') as f:
             raw = json.load(f)
         if isinstance(raw, dict): raw = [raw]
-            
         df = pd.DataFrame(raw)
         df.columns = [x.strip().lower() for x in df.columns]
         con.register('user_data', df)
@@ -64,7 +139,7 @@ else:
 
 # --- B. LOAD MASTER FILES ---
 print("Looking for CSV files in folder...")
-all_master_files = [] # Track all filenames
+all_master_files = [] 
 try:
     results = drive_service.files().list(
         q=f"'{FOLDER_ID}' in parents and mimeType='text/csv' and trashed=false",
@@ -78,11 +153,13 @@ else:
     print(f"Found {len(files)} CSV files. Downloading...")
     for item in files:
         safe_name = item['name'].replace(" ", "_")
-        all_master_files.append(safe_name) # Add to master list
-        download_file(item['id'], safe_name)
+        all_master_files.append(safe_name)
+        # Optimization: Check if file exists to avoid re-downloading on re-runs if caching enabled
+        if not os.path.exists(safe_name):
+            download_file(item['id'], safe_name)
 
 # ==========================================
-# 3. ANALYSIS (NEW LOGIC)
+# 3. ANALYSIS
 # ==========================================
 print("Running Analysis...")
 
@@ -96,41 +173,29 @@ sql_query = """
 """
 
 rca_text = ""
-summary_data = []
+matches = []
 
 try:
     if files:
-        # Run Query to find matches
         matches_df = con.execute(sql_query).fetchdf()
-        summary_data = matches_df.to_dict(orient='records')
+        matches = matches_df.to_dict(orient='records')
         
-        # 1. Identify where member WAS found
         if len(matches_df) > 0:
             found_files = matches_df['Found_In_File'].unique().tolist()
         else:
             found_files = []
             
-        # 2. Compare against ALL files
         total_files_count = len(all_master_files)
         found_files_count = len(found_files)
         
-        # 3. Apply Logic
         if found_files_count == 0:
-            # Case: Not found anywhere
             rca_text = "Member not found in any file."
-            
         elif found_files_count == total_files_count:
-            # Case: Found everywhere
             rca_text = "Found in all files."
-            
         else:
-            # Case: Found in some, missing in others (Removed)
-            # Find the difference: All Files - Found Files
             missing_files = list(set(all_master_files) - set(found_files))
-            missing_files.sort() # Sort alphabetically to look cleaner
-            
-            rca_text = f"Member removed/missing from {len(missing_files)} file(s): {', '.join(missing_files)}"
-
+            missing_files.sort()
+            rca_text = f"Member removed from {len(missing_files)} file(s): {', '.join(missing_files)}"
     else:
         rca_text = "Analysis Failed: No Master CSV files found."
 
@@ -139,8 +204,8 @@ except Exception as e:
     print(rca_text)
 
 # ==========================================
-# 4. UPLOAD RESULT
+# 4. WRITE DIRECTLY TO SHEETS
 # ==========================================
-result_payload = {"request_id": REQUEST_ID, "rca_text": rca_text, "summary": summary_data}
-upload_file(f"result_{REQUEST_ID}.json", result_payload)
-print(f"Done. RCA: {rca_text}")
+print(f"RCA Result: {rca_text}")
+write_to_google_sheet(matches, rca_text)
+print("Done.")
