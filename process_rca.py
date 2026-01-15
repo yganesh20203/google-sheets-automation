@@ -4,28 +4,37 @@ import duckdb
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
+from googleapiclient.errors import HttpError
 import io
 
 # ==========================================
 # 1. SETUP & AUTHENTICATION
 # ==========================================
-# Load Service Account Credentials from GitHub Secret
 creds_info = json.loads(os.environ['GCP_SA_KEY'])
 creds = service_account.Credentials.from_service_account_info(creds_info)
 drive_service = build('drive', 'v3', credentials=creds)
 
-# Get Environment Variables
+# ENV VARIABLES
 REQUEST_ID = os.environ['REQUEST_ID']
 INPUT_FILE_ID = os.environ['INPUT_FILE_ID']
-FOLDER_ID = "YOUR_DRIVE_FOLDER_ID"  # <--- MAKE SURE THIS IS UPDATED
+
+# *** CRITICAL FIX: HARDCODED FOLDER ID ***
+# This is the ID from your screenshot URL
+FOLDER_ID = "1pjsuzA9bmQdltnvf21vZ0U4bZ75fUyWt" 
 
 def download_file(file_id, output_path):
-    request = drive_service.files().get_media(fileId=file_id)
-    fh = io.FileIO(output_path, 'wb')
-    downloader = MediaIoBaseDownload(fh, request)
-    done = False
-    while done is False:
-        status, done = downloader.next_chunk()
+    try:
+        request = drive_service.files().get_media(fileId=file_id)
+        fh = io.FileIO(output_path, 'wb')
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while done is False:
+            status, done = downloader.next_chunk()
+    except HttpError as e:
+        print(f"Error downloading {file_id}: {e}")
+        # If it's a Google Doc/Sheet, we can't download it as binary.
+        if 'fileNotDownloadable' in str(e):
+             print("Skipping file (It might be a Google Sheet/Doc, not a CSV/JSON).")
 
 def upload_file(filename, content_dict):
     file_metadata = {'name': filename, 'parents': [FOLDER_ID]}
@@ -34,52 +43,55 @@ def upload_file(filename, content_dict):
     drive_service.files().create(body=file_metadata, media_body=media).execute()
 
 # ==========================================
-# 2. DATA PREPARATION
+# 2. MAIN LOGIC
 # ==========================================
-# Initialize DuckDB
 con = duckdb.connect(database=':memory:')
 
 print(f"Processing Request: {REQUEST_ID}")
 
-# A. Download the User's Input (The rows they typed in the web app)
+# A. Download User Input (The JSON file)
+print(f"Downloading Input File ID: {INPUT_FILE_ID}...")
 download_file(INPUT_FILE_ID, 'user_input.json')
 
-# Load User Input into DuckDB
-# We assume the column name from your frontend is "mem_nbr" based on your previous code
-con.execute("CREATE TABLE user_data AS SELECT * FROM read_json_auto('user_input.json')")
+# Check if file exists before proceeding
+if not os.path.exists('user_input.json'):
+    # Create a dummy file if download failed just to prevent crash, but log error
+    print("CRITICAL ERROR: Input file failed to download. Check the File ID.")
+    with open('user_input.json', 'w') as f: f.write('[]')
 
-# B. Download ALL Master Files from Drive
-print("Downloading Master Files...")
+try:
+    con.execute("CREATE TABLE user_data AS SELECT * FROM read_json_auto('user_input.json')")
+except Exception as e:
+    print(f"Error reading input JSON: {e}")
+
+# B. Download Master Files (CSVs)
+print("Looking for CSV files in folder...")
 results = drive_service.files().list(
     q=f"'{FOLDER_ID}' in parents and mimeType='text/csv' and trashed=false",
     fields="files(id, name)").execute()
 
 files = results.get('files', [])
+
 if not files:
-    print("Warning: No CSV files found in the Drive folder.")
-
-# Download each CSV
-for item in files:
-    print(f"Downloading {item['name']}...")
-    # Sanitize filename (remove spaces just in case)
-    safe_name = item['name'].replace(" ", "_")
-    download_file(item['id'], safe_name)
+    print("WARNING: No CSV files found! (If your files are .xlsb, please convert at least one to CSV for testing)")
+else:
+    print(f"Found {len(files)} CSV files. Downloading...")
+    for item in files:
+        # Replace spaces to prevent SQL errors
+        safe_name = item['name'].replace(" ", "_")
+        print(f"Downloading {safe_name}...")
+        download_file(item['id'], safe_name)
 
 # ==========================================
-# 3. THE "SEARCH EVERYWHERE" QUERY
+# 3. ANALYSIS
 # ==========================================
-print("Running Member Search...")
+print("Running Analysis...")
 
-# We use read_csv_auto('*.csv', filename=true) 
-# This magic command reads ALL CSVs at once and adds a 'filename' column
-# We join this with the user_data to find matches.
-
-# Note: Ensure the CSV column header matches 'Membership_NBR' or whatever is in your files.
-# I am assuming the CSV header is "Membership_NBR" and User input is "mem_nbr"
-
+# This query looks for the 'mem_nbr' from user_input inside ALL downloaded CSVs
+# Note: Ensure your CSV column header matches 'Membership_NBR' exactly.
 sql_query = """
     SELECT 
-        u.mem_nbr AS User_Requested_ID,
+        u.mem_nbr AS User_ID,
         m.filename AS Found_In_File,
         m.* FROM user_data u
     JOIN read_csv_auto('*.csv', filename=true, union_by_name=true) m 
@@ -87,17 +99,20 @@ sql_query = """
 """
 
 try:
-    # Run the search
-    matches_df = con.execute(sql_query).fetchdf()
-    
-    # Create the text summary
-    if len(matches_df) > 0:
-        found_files = matches_df['Found_In_File'].unique().tolist()
-        rca_text = f"Success! Found Member ID in {len(found_files)} file(s): {', '.join(found_files)}"
-    else:
-        rca_text = "Member ID not found in any of the 20 master files."
+    # Only run if we actually downloaded CSVs
+    if files:
+        matches_df = con.execute(sql_query).fetchdf()
         
-    summary_data = matches_df.to_dict(orient='records')
+        if len(matches_df) > 0:
+            found_files = matches_df['Found_In_File'].unique().tolist()
+            rca_text = f"Found Member ID in: {', '.join(found_files)}"
+        else:
+            rca_text = "Member ID not found in any CSV file."
+        
+        summary_data = matches_df.to_dict(orient='records')
+    else:
+        rca_text = "Error: No CSV master files were found to check against."
+        summary_data = []
 
 except Exception as e:
     rca_text = f"Error during query: {str(e)}"
@@ -105,15 +120,15 @@ except Exception as e:
     print(rca_text)
 
 # ==========================================
-# 4. UPLOAD RESULTS
+# 4. UPLOAD RESULT
 # ==========================================
 result_payload = {
     "request_id": REQUEST_ID,
     "rca_text": rca_text,
-    "summary": summary_data, # This contains the full row data + filename
-    "metrics": [] 
+    "summary": summary_data
 }
 
-print("Uploading Results to Drive...")
-upload_file(f"result_{REQUEST_ID}.json", result_payload)
-print("Process Complete.")
+output_filename = f"result_{REQUEST_ID}.json"
+print(f"Uploading {output_filename}...")
+upload_file(output_filename, result_payload)
+print("Done.")
