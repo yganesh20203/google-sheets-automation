@@ -14,10 +14,8 @@ creds_info = json.loads(os.environ['GCP_SA_KEY'])
 creds = service_account.Credentials.from_service_account_info(creds_info)
 drive_service = build('drive', 'v3', credentials=creds)
 
-# ENV VARIABLES
 REQUEST_ID = os.environ.get('REQUEST_ID', 'unknown_id')
 INPUT_FILE_ID = os.environ.get('INPUT_FILE_ID', '')
-# HARDCODE YOUR FOLDER ID HERE
 FOLDER_ID = "1pjsuzA9bmQdltnvf21vZ0U4bZ75fUyWt"
 
 def download_file(file_id, output_path):
@@ -47,33 +45,26 @@ def upload_file(filename, content_dict):
 con = duckdb.connect(database=':memory:')
 print(f"Processing Request: {REQUEST_ID}")
 
-# --- A. LOAD USER INPUT (Using Pandas for Safety) ---
+# --- A. LOAD USER INPUT ---
 print(f"Downloading Input File ID: {INPUT_FILE_ID}...")
 if download_file(INPUT_FILE_ID, 'user_input.json'):
     try:
-        # Load JSON with Python first to handle formatting issues
         with open('user_input.json', 'r') as f:
             raw = json.load(f)
-        
-        # Ensure it's a list
         if isinstance(raw, dict): raw = [raw]
             
-        # Create DataFrame and Register to DuckDB
         df = pd.DataFrame(raw)
-        # Normalize column names (lowercase, strip spaces) to avoid matching errors
         df.columns = [x.strip().lower() for x in df.columns]
-        
-        print(f"User Data Loaded. Columns: {list(df.columns)}")
         con.register('user_data', df)
     except Exception as e:
         print(f"Input Error: {e}")
-        con.execute("CREATE TABLE user_data (mem_nbr VARCHAR)") # Fallback
+        con.execute("CREATE TABLE user_data (mem_nbr VARCHAR)")
 else:
-    print("Input download failed.")
-    con.execute("CREATE TABLE user_data (mem_nbr VARCHAR)") # Fallback
+    con.execute("CREATE TABLE user_data (mem_nbr VARCHAR)")
 
-# --- B. LOAD MASTER FILES (Using DuckDB for Speed) ---
+# --- B. LOAD MASTER FILES ---
 print("Looking for CSV files in folder...")
+all_master_files = [] # Track all filenames
 try:
     results = drive_service.files().list(
         q=f"'{FOLDER_ID}' in parents and mimeType='text/csv' and trashed=false",
@@ -87,15 +78,14 @@ else:
     print(f"Found {len(files)} CSV files. Downloading...")
     for item in files:
         safe_name = item['name'].replace(" ", "_")
+        all_master_files.append(safe_name) # Add to master list
         download_file(item['id'], safe_name)
 
 # ==========================================
-# 3. ANALYSIS QUERY
+# 3. ANALYSIS (NEW LOGIC)
 # ==========================================
 print("Running Analysis...")
 
-# SQL: Join Pandas Table (user_data) with DuckDB CSVs
-# Note: I used 'LOWER' to ensure case-insensitive matching on the Header
 sql_query = """
     SELECT 
         u.mem_nbr AS User_ID,
@@ -110,17 +100,37 @@ summary_data = []
 
 try:
     if files:
-        # Check if 'mem_nbr' exists in input (case insensitive check)
-        # We forced columns to lower case earlier in Pandas step
+        # Run Query to find matches
         matches_df = con.execute(sql_query).fetchdf()
+        summary_data = matches_df.to_dict(orient='records')
         
+        # 1. Identify where member WAS found
         if len(matches_df) > 0:
             found_files = matches_df['Found_In_File'].unique().tolist()
-            rca_text = f"Success! Found in: {', '.join(found_files)}"
         else:
-            rca_text = "Member ID not found in any master file."
+            found_files = []
+            
+        # 2. Compare against ALL files
+        total_files_count = len(all_master_files)
+        found_files_count = len(found_files)
         
-        summary_data = matches_df.to_dict(orient='records')
+        # 3. Apply Logic
+        if found_files_count == 0:
+            # Case: Not found anywhere
+            rca_text = "Member not found in any file."
+            
+        elif found_files_count == total_files_count:
+            # Case: Found everywhere
+            rca_text = "Found in all files."
+            
+        else:
+            # Case: Found in some, missing in others (Removed)
+            # Find the difference: All Files - Found Files
+            missing_files = list(set(all_master_files) - set(found_files))
+            missing_files.sort() # Sort alphabetically to look cleaner
+            
+            rca_text = f"Member removed/missing from {len(missing_files)} file(s): {', '.join(missing_files)}"
+
     else:
         rca_text = "Analysis Failed: No Master CSV files found."
 
@@ -133,4 +143,4 @@ except Exception as e:
 # ==========================================
 result_payload = {"request_id": REQUEST_ID, "rca_text": rca_text, "summary": summary_data}
 upload_file(f"result_{REQUEST_ID}.json", result_payload)
-print("Done.")
+print(f"Done. RCA: {rca_text}")
