@@ -15,7 +15,8 @@ on:
       file_id:
         description: 'Google Drive File ID (Input JSON)'
         required: true
-        default: '1pjsuzA9bmQdltnvf21vZ0U4bZ75fUyWt'
+        # WARNING: Put a specific JSON FILE ID here, NOT your Folder ID
+        default: '' 
 
 jobs:
   run_analysis:
@@ -31,7 +32,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          python-version: '3.10'  # UPDATED: Fixes the "non-supported Python" warning
 
       - name: Install Dependencies
         run: |
@@ -40,8 +41,10 @@ jobs:
       - name: Run Analysis
         env:
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
-          # LOGIC: If triggered by script, use payload. If manual, use inputs.
-          REQUEST_ID: ${{ github.event.client_payload.request_id || github.event.inputs.request_id }}
-          INPUT_FILE_ID: ${{ github.event.client_payload.file_id || github.event.inputs.file_id }}
-          # Ensure FOLDER_ID is set in your Python script, or add it here if you want it dynamic
+          
+          # *** THE FIX: CONCATENATION ***
+          # We place them side-by-side. One is always empty, so this safely grabs the other.
+          REQUEST_ID: ${{ github.event.client_payload.request_id }}${{ github.event.inputs.request_id }}
+          INPUT_FILE_ID: ${{ github.event.client_payload.file_id }}${{ github.event.inputs.file_id }}
+          
         run: python process_rca.py
