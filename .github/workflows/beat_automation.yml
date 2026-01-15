@@ -15,7 +15,7 @@ on:
       file_id:
         description: 'Google Drive File ID (Input JSON)'
         required: true
-        default: 'PASTE_A_TEST_FILE_ID_HERE'
+        default: '1pjsuzA9bmQdltnvf21vZ0U4bZ75fUyWt'
 
 jobs:
   run_analysis:
