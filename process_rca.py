@@ -6,16 +6,18 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 import io
 
-# --- CONFIGURATION ---
+# ==========================================
+# 1. SETUP & AUTHENTICATION
+# ==========================================
 # Load Service Account Credentials from GitHub Secret
 creds_info = json.loads(os.environ['GCP_SA_KEY'])
 creds = service_account.Credentials.from_service_account_info(creds_info)
 drive_service = build('drive', 'v3', credentials=creds)
 
-# Inputs from the Dispatch Event
+# Get Environment Variables
 REQUEST_ID = os.environ['REQUEST_ID']
 INPUT_FILE_ID = os.environ['INPUT_FILE_ID']
-FOLDER_ID = "1pjsuzA9bmQdltnvf21vZ0U4bZ75fUyWt" # Hardcode or pass as env var
+FOLDER_ID = "YOUR_DRIVE_FOLDER_ID"  # <--- MAKE SURE THIS IS UPDATED
 
 def download_file(file_id, output_path):
     request = drive_service.files().get_media(fileId=file_id)
@@ -31,73 +33,87 @@ def upload_file(filename, content_dict):
                               mimetype='application/json')
     drive_service.files().create(body=file_metadata, media_body=media).execute()
 
-# 1. SETUP DUCKDB
+# ==========================================
+# 2. DATA PREPARATION
+# ==========================================
+# Initialize DuckDB
 con = duckdb.connect(database=':memory:')
 
-# 2. DOWNLOAD USER INPUT
-print("Downloading User Input...")
+print(f"Processing Request: {REQUEST_ID}")
+
+# A. Download the User's Input (The rows they typed in the web app)
 download_file(INPUT_FILE_ID, 'user_input.json')
 
 # Load User Input into DuckDB
-# We assume the JSON is an array of objects
+# We assume the column name from your frontend is "mem_nbr" based on your previous code
 con.execute("CREATE TABLE user_data AS SELECT * FROM read_json_auto('user_input.json')")
 
-# 3. DOWNLOAD & REGISTER MASTER FILES
-# (Assuming you have master files named like 'master_store.csv', 'master_emp.csv' in the folder)
-# For this example, we will query them directly if they are standard CSVs,
-# or you can download them here if they are not already in the repo.
-# Ideally, keep the 20 master files IN THE DRIVE folder.
-
-# We need to list and download the relevant master files from Drive to the runner
-# This is a simplified loop to get all CSVs from that folder
+# B. Download ALL Master Files from Drive
 print("Downloading Master Files...")
 results = drive_service.files().list(
-    q=f"'{FOLDER_ID}' in parents and mimeType='text/csv'",
+    q=f"'{FOLDER_ID}' in parents and mimeType='text/csv' and trashed=false",
     fields="files(id, name)").execute()
-items = results.get('files', [])
 
-for item in items:
+files = results.get('files', [])
+if not files:
+    print("Warning: No CSV files found in the Drive folder.")
+
+# Download each CSV
+for item in files:
     print(f"Downloading {item['name']}...")
-    download_file(item['id'], item['name'])
+    # Sanitize filename (remove spaces just in case)
+    safe_name = item['name'].replace(" ", "_")
+    download_file(item['id'], safe_name)
 
-# 4. RUN THE RCA LOGIC
-# Example Scenario: Check if 'Store NBR' in user input exists in 'master_stores.csv'
-# and if 'BDA Emp Code' is active in 'master_employees.csv'
+# ==========================================
+# 3. THE "SEARCH EVERYWHERE" QUERY
+# ==========================================
+print("Running Member Search...")
 
-print("Running Analysis...")
+# We use read_csv_auto('*.csv', filename=true) 
+# This magic command reads ALL CSVs at once and adds a 'filename' column
+# We join this with the user_data to find matches.
 
-# Create tables from downloaded CSVs
-# con.execute("CREATE TABLE stores AS SELECT * FROM read_csv_auto('master_store.csv')")
-# con.execute("CREATE TABLE employees AS SELECT * FROM read_csv_auto('master_employees.csv')")
+# Note: Ensure the CSV column header matches 'Membership_NBR' or whatever is in your files.
+# I am assuming the CSV header is "Membership_NBR" and User input is "mem_nbr"
 
-# --- CUSTOMIZE YOUR SQL HERE ---
-# This is the core logic. Since I don't have your exact CSV columns, 
-# here is a generic SQL that joins user input with a master file.
-
-sql = """
+sql_query = """
     SELECT 
-        u.store_nbr,
-        u.bda_code,
-        CASE 
-            WHEN s.store_id IS NULL THEN 'Store Not Found'
-            WHEN e.status != 'Active' THEN 'BDA Inactive'
-            ELSE 'Valid'
-        END as rca_status
-    FROM user_data u
-    LEFT JOIN read_csv_auto('*.csv', union_by_name=True) m ON u.store_nbr = m.store_id 
-    -- Note: You need to refine this join based on your actual 20 files structure
+        u.mem_nbr AS User_Requested_ID,
+        m.filename AS Found_In_File,
+        m.* FROM user_data u
+    JOIN read_csv_auto('*.csv', filename=true, union_by_name=true) m 
+      ON CAST(u.mem_nbr AS VARCHAR) = CAST(m."Membership_NBR" AS VARCHAR)
 """
-# For now, let's just return a summary of what we received to prove it works
-final_df = con.execute("SELECT * FROM user_data").fetchdf() 
-summary_text = f"Processed {len(final_df)} rows. (DuckDB Analysis Placeholder)"
 
-# 5. UPLOAD RESULT
+try:
+    # Run the search
+    matches_df = con.execute(sql_query).fetchdf()
+    
+    # Create the text summary
+    if len(matches_df) > 0:
+        found_files = matches_df['Found_In_File'].unique().tolist()
+        rca_text = f"Success! Found Member ID in {len(found_files)} file(s): {', '.join(found_files)}"
+    else:
+        rca_text = "Member ID not found in any of the 20 master files."
+        
+    summary_data = matches_df.to_dict(orient='records')
+
+except Exception as e:
+    rca_text = f"Error during query: {str(e)}"
+    summary_data = []
+    print(rca_text)
+
+# ==========================================
+# 4. UPLOAD RESULTS
+# ==========================================
 result_payload = {
     "request_id": REQUEST_ID,
-    "rca_text": "Analysis Complete. Validation passed for test batch.",
-    "summary": final_df.to_dict(orient='records')
+    "rca_text": rca_text,
+    "summary": summary_data, # This contains the full row data + filename
+    "metrics": [] 
 }
 
-print("Uploading Results...")
+print("Uploading Results to Drive...")
 upload_file(f"result_{REQUEST_ID}.json", result_payload)
-print("Done.")
+print("Process Complete.")
