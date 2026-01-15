@@ -1,0 +1,32 @@
+name: Process BDA Data
+
+on:
+  repository_dispatch:
+    types: [process_data]
+
+jobs:
+  run_analysis:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Dependencies
+        run: |
+          pip install duckdb pandas google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2
+
+      - name: Run Analysis
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}  # You must add this in Repo Settings > Secrets
+          REQUEST_ID: ${{ github.event.client_payload.request_id }}
+          INPUT_FILE_ID: ${{ github.event.client_payload.file_id }}
+        run: python process_rca.py
