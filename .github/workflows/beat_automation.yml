@@ -15,8 +15,8 @@ on:
       file_id:
         description: 'Google Drive File ID (Input JSON)'
         required: true
-        # WARNING: Put a specific JSON FILE ID here, NOT your Folder ID
-        default: '' 
+        # Leave default empty, or paste a specific Test JSON File ID here for quick debugging
+        default: ''
 
 jobs:
   run_analysis:
@@ -32,7 +32,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'  # UPDATED: Fixes the "non-supported Python" warning
+          python-version: '3.11'  # Updated to 3.11 to fix "future warning"
 
       - name: Install Dependencies
         run: |
@@ -42,8 +42,14 @@ jobs:
         env:
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
           
-          # *** THE FIX: CONCATENATION ***
-          # We place them side-by-side. One is always empty, so this safely grabs the other.
+          # ======================================================
+          # CRITICAL FIX: VARIABLE CONCATENATION
+          # ======================================================
+          # We place the two variables side-by-side. 
+          # Since 'repository_dispatch' and 'workflow_dispatch' never happen 
+          # at the same time, one is always empty and the other contains your data.
+          # This guarantees Python gets the correct ID regardless of trigger method.
+          
           REQUEST_ID: ${{ github.event.client_payload.request_id }}${{ github.event.inputs.request_id }}
           INPUT_FILE_ID: ${{ github.event.client_payload.file_id }}${{ github.event.inputs.file_id }}
           
