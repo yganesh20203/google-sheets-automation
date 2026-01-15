@@ -32,25 +32,40 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'  # Updated to 3.11 to fix "future warning"
+          python-version: '3.11'
 
       - name: Install Dependencies
         run: |
           pip install duckdb pandas google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2
 
+      # DEBUG STEP: Print what GitHub actually sees (Check your Action Logs for this!)
+      - name: Debug Inputs
+        run: |
+          echo "Payload Request ID: ${{ github.event.client_payload.request_id }}"
+          echo "Payload File ID: ${{ github.event.client_payload.file_id }}"
+          echo "Manual Request ID: ${{ github.event.inputs.request_id }}"
+          echo "Manual File ID: ${{ github.event.inputs.file_id }}"
+
       - name: Run Analysis
         env:
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+          # We pass the raw values to shell variables first
+          PAYLOAD_REQ_ID: ${{ github.event.client_payload.request_id }}
+          PAYLOAD_FILE_ID: ${{ github.event.client_payload.file_id }}
+          MANUAL_REQ_ID: ${{ github.event.inputs.request_id }}
+          MANUAL_FILE_ID: ${{ github.event.inputs.file_id }}
+        run: |
+          # LOGIC: If Payload ID exists, use it. Otherwise use Manual ID.
+          if [ -n "$PAYLOAD_REQ_ID" ]; then
+            export REQUEST_ID="$PAYLOAD_REQ_ID"
+            export INPUT_FILE_ID="$PAYLOAD_FILE_ID"
+          else
+            export REQUEST_ID="$MANUAL_REQ_ID"
+            export INPUT_FILE_ID="$MANUAL_FILE_ID"
+          fi
           
-          # ======================================================
-          # CRITICAL FIX: VARIABLE CONCATENATION
-          # ======================================================
-          # We place the two variables side-by-side. 
-          # Since 'repository_dispatch' and 'workflow_dispatch' never happen 
-          # at the same time, one is always empty and the other contains your data.
-          # This guarantees Python gets the correct ID regardless of trigger method.
+          echo "FINAL REQUEST_ID: $REQUEST_ID"
+          echo "FINAL INPUT_FILE_ID: $INPUT_FILE_ID"
           
-          REQUEST_ID: ${{ github.event.client_payload.request_id }}${{ github.event.inputs.request_id }}
-          INPUT_FILE_ID: ${{ github.event.client_payload.file_id }}${{ github.event.inputs.file_id }}
-          
-        run: python process_rca.py
+          # Run Python with the exported variables
+          python process_rca.py
