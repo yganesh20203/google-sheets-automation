@@ -15,7 +15,7 @@ drive_service = build('drive', 'v3', credentials=creds)
 # Inputs from the Dispatch Event
 REQUEST_ID = os.environ['REQUEST_ID']
 INPUT_FILE_ID = os.environ['INPUT_FILE_ID']
-FOLDER_ID = "YOUR_DRIVE_FOLDER_ID" # Hardcode or pass as env var
+FOLDER_ID = "1pjsuzA9bmQdltnvf21vZ0U4bZ75fUyWt" # Hardcode or pass as env var
 
 def download_file(file_id, output_path):
     request = drive_service.files().get_media(fileId=file_id)
