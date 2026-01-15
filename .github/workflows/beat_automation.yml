@@ -1,8 +1,21 @@
 name: Process BDA Data
 
 on:
+  # 1. Triggered by Google Apps Script (Automated)
   repository_dispatch:
     types: [process_data]
+
+  # 2. Triggered Manually via GitHub UI (Manual Button)
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: 'Request ID (for naming output)'
+        required: true
+        default: 'manual_run_01'
+      file_id:
+        description: 'Google Drive File ID (Input JSON)'
+        required: true
+        default: 'PASTE_A_TEST_FILE_ID_HERE'
 
 jobs:
   run_analysis:
@@ -26,7 +39,9 @@ jobs:
 
       - name: Run Analysis
         env:
-          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}  # You must add this in Repo Settings > Secrets
-          REQUEST_ID: ${{ github.event.client_payload.request_id }}
-          INPUT_FILE_ID: ${{ github.event.client_payload.file_id }}
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+          # LOGIC: If triggered by script, use payload. If manual, use inputs.
+          REQUEST_ID: ${{ github.event.client_payload.request_id || github.event.inputs.request_id }}
+          INPUT_FILE_ID: ${{ github.event.client_payload.file_id || github.event.inputs.file_id }}
+          # Ensure FOLDER_ID is set in your Python script, or add it here if you want it dynamic
         run: python process_rca.py
