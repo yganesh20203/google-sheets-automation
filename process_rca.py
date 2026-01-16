@@ -59,7 +59,6 @@ def write_values_to_sheet(values):
 
         print(f"Writing {len(values)} rows to Sheet...")
 
-        # 1. Append detailed rows to 'Analysis_Results'
         sheets_service.spreadsheets().values().append(
             spreadsheetId=SPREADSHEET_ID,
             range=f"{RESULTS_TAB_NAME}!A:A",
@@ -67,7 +66,6 @@ def write_values_to_sheet(values):
             body={'values': values}
         ).execute()
 
-        # 2. Update 'Request_Queue' Status
         result = sheets_service.spreadsheets().values().get(
             spreadsheetId=SPREADSHEET_ID, range=f"{QUEUE_TAB_NAME}!B:B").execute()
         rows_in_queue = result.get('values', [])
@@ -109,18 +107,32 @@ if download_file(INPUT_FILE_ID, 'user_input.json'):
         
         df_input = pd.DataFrame(raw)
         df_input.columns = [x.strip().lower() for x in df_input.columns]
+        
+        # SMART FIX: Swap Name/ID if ID is missing but Name is numeric
+        if 'mem_nbr' in df_input.columns and 'mem_name' in df_input.columns:
+            def fix_id(row):
+                val_id = str(row['mem_nbr']).strip()
+                val_name = str(row['mem_name']).strip()
+                if (val_id == '' or val_id == 'nan' or val_id == 'None') and val_name.isdigit():
+                    return val_name 
+                return val_id
+            df_input['mem_nbr'] = df_input.apply(fix_id, axis=1)
+
         con.register('user_data', df_input)
         
         if 'mem_nbr' in df_input.columns:
-            input_members = df_input['mem_nbr'].astype(str).unique().tolist()
-    except: con.execute("CREATE TABLE user_data (mem_nbr VARCHAR)")
+            input_members = [x for x in df_input['mem_nbr'].astype(str).unique().tolist() if x and x != 'nan' and x != 'None']
+            
+    except Exception as e:
+        print(f"Input Parsing Error: {e}")
+        con.execute("CREATE TABLE user_data (mem_nbr VARCHAR)")
 else:
     con.execute("CREATE TABLE user_data (mem_nbr VARCHAR)")
 
-# --- B. LOAD MASTER FILES ---
+# --- B. LOAD MASTER FILES (ORDER: GUARDRAIL -> SAVEEASY -> MONTHLY) ---
 all_master_files = [] 
 has_save_easy = False
-has_store_guardrail = False # Flag for new file
+has_store_guardrail = False 
 
 try:
     results = drive_service.files().list(
@@ -130,34 +142,43 @@ try:
 except: files = []
 
 if files:
-    print(f"Found {len(files)} CSV files. Downloading...")
+    print(f"Found {len(files)} CSV files. Starting Sequence...")
+    
+    # 1. PROCESS STORE GUARDRAIL FIRST
     for item in files:
         safe_name = item['name'].replace(" ", "_")
-        
-        # 1. Handle SaveEasy.csv
+        if "Store_Guardrail" in safe_name:
+            print(">>> Loading Store_Guardrail...")
+            if download_file(item['id'], safe_name):
+                try:
+                    # Load as ALL VARCHAR to protect the Codes
+                    con.execute(f"CREATE OR REPLACE TABLE store_guardrail AS SELECT * FROM read_csv_auto('{safe_name}', all_varchar=true, union_by_name=true)")
+                    has_store_guardrail = True
+                except Exception as e: print(f"Failed to load Guardrail: {e}")
+    
+    # 2. PROCESS SAVEEASY SECOND
+    for item in files:
+        safe_name = item['name'].replace(" ", "_")
         if "SaveEasy" in safe_name:
-            print("Found SaveEasy File!")
+            print(">>> Loading SaveEasy...")
             if download_file(item['id'], safe_name):
                 try:
                     con.execute(f"CREATE OR REPLACE TABLE save_easy AS SELECT * FROM read_csv_auto('{safe_name}', union_by_name=true)")
                     has_save_easy = True
-                except Exception as e: print(f"Error loading SaveEasy: {e}")
+                except Exception as e: print(f"Failed to load SaveEasy: {e}")
+
+    # 3. PROCESS MONTHLY FILES LAST
+    print(">>> Loading Monthly Files...")
+    for item in files:
+        safe_name = item['name'].replace(" ", "_")
         
-        # 2. Handle Store_Guardrail.csv (NEW)
-        elif "Store_Guardrail" in safe_name:
-            print("Found Store_Guardrail File!")
-            if download_file(item['id'], safe_name):
-                try:
-                    # We assume Column A is named 'Code' as per instructions
-                    con.execute(f"CREATE OR REPLACE TABLE store_guardrail AS SELECT * FROM read_csv_auto('{safe_name}', union_by_name=true)")
-                    has_store_guardrail = True
-                except Exception as e: print(f"Error loading Store_Guardrail: {e}")
-        
-        # 3. Handle Monthly Files
-        else:
-            all_master_files.append(safe_name)
-            if not os.path.exists(safe_name):
-                download_file(item['id'], safe_name)
+        # Skip the special files we just handled
+        if "Store_Guardrail" in safe_name or "SaveEasy" in safe_name:
+            continue
+            
+        all_master_files.append(safe_name)
+        if not os.path.exists(safe_name):
+            download_file(item['id'], safe_name)
             
     all_master_files.sort(key=get_file_date)
 
@@ -201,23 +222,29 @@ try:
             rca_text = ""
             status = "COMPLETED"
 
-            # Try to get Store Number from input if not found in matches
+            # --- SMART STORE NUMBER RETRIEVAL ---
             input_store_val = ""
             try:
-                # Look up store in original input df
                 input_row = con.execute(f"SELECT store_nbr FROM user_data WHERE CAST(mem_nbr AS VARCHAR) = '{mem_id_str}'").fetchone()
                 if input_row and input_row[0]:
-                    input_store_val = str(input_row[0])
+                    input_store_val = str(input_row[0]).replace('.0', '').strip()
             except: pass
 
+            matched_store_val = ""
             if not user_matches.empty:
                 first_record = user_matches.iloc[0]
-                store_val = str(first_record.get('store_nbr', ''))
+                for col in ['store_nbr', 'Store_NBR', 'Store', 'StoreId']:
+                    if col in user_matches.columns:
+                        val = first_record.get(col)
+                        if val and str(val).lower() != 'nan':
+                            matched_store_val = str(val).replace('.0', '').strip()
+                            break
+                
                 name_val = first_record.get('User_Name', '') or first_record.get('mem_name', '')
                 status = "MATCH FOUND"
-            else:
-                # Use input store if match not found
-                store_val = input_store_val
+
+            # Priority: Monthly File Store > Input Store
+            store_val = matched_store_val if matched_store_val else input_store_val
 
             if found_count == 0:
                 rca_text = "Member not found in any monthly file."
@@ -234,26 +261,23 @@ try:
 
             # --- 2. SaveEasy Logic ---
             if has_save_easy:
-                check_se = con.execute(f"SELECT COUNT(*) FROM save_easy WHERE CAST(MembershipNBR AS VARCHAR) = '{mem_id_str}'").fetchone()
-                if check_se[0] > 0:
-                    rca_text += " - SaveEasy Member" 
-                    if status == "COMPLETED": status = "MATCH FOUND (SaveEasy)"
-
-            # --- 3. Store Guardrail Logic (NEW) ---
-            if has_store_guardrail and store_val and mem_id_str:
-                # Combine Store + Mem (e.g. 4702 + 24456584 -> 470224456584)
-                combined_code = f"{store_val}{mem_id_str}"
-                
-                # Check if this code exists in Column A ('Code') of Store_Guardrail
-                # We interpret it as a string to be safe against integer overflow
                 try:
-                    check_sg = con.execute(f"SELECT COUNT(*) FROM store_guardrail WHERE CAST(Code AS VARCHAR) = '{combined_code}'").fetchone()
-                    
+                    check_se = con.execute(f"SELECT COUNT(*) FROM save_easy WHERE CAST(MembershipNBR AS VARCHAR) = '{mem_id_str}'").fetchone()
+                    if check_se[0] > 0:
+                        rca_text += " - SaveEasy Member" 
+                        if status == "COMPLETED": status = "MATCH FOUND (SaveEasy)"
+                except: pass
+
+            # --- 3. Store Guardrail Logic ---
+            if has_store_guardrail and store_val and mem_id_str:
+                combined_code = f"{store_val}{mem_id_str}"
+                try:
+                    # Check Column A ('Code')
+                    check_sg = con.execute(f"SELECT COUNT(*) FROM store_guardrail WHERE TRIM(CAST(Code AS VARCHAR)) = '{combined_code}'").fetchone()
                     if check_sg[0] > 0:
                         rca_text += " - Member in Store Guardrail list"
-                        # We don't necessarily change status here, just append the warning
                 except Exception as e:
-                    print(f"Error checking guardrail for {combined_code}: {e}")
+                    print(f"Error checking guardrail: {e}")
 
             # --- 4. Final Row ---
             final_rows_to_write.append([
