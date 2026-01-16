@@ -132,7 +132,8 @@ else:
 # --- B. LOAD MASTER FILES ---
 all_master_files = [] 
 has_save_easy = False
-has_store_guardrail = False 
+has_store_guardrail = False
+has_pan_india = False # NEW FLAG
 
 try:
     results = drive_service.files().list(
@@ -144,33 +145,41 @@ except: files = []
 if files:
     print(f"Found {len(files)} CSV files. Starting Sequence...")
     
-    # 1. PROCESS STORE GUARDRAIL FIRST
+    # 1. PROCESS GUARDRAILS & SPECIAL FILES
     for item in files:
         safe_name = item['name'].replace(" ", "_")
-        if "Store_Guardrail" in safe_name:
+        
+        if "Store_Guardrail" in safe_name and "Pan_india" not in safe_name:
             print(">>> Loading Store_Guardrail...")
             if download_file(item['id'], safe_name):
                 try:
                     con.execute(f"CREATE OR REPLACE TABLE store_guardrail AS SELECT * FROM read_csv_auto('{safe_name}', all_varchar=true, union_by_name=true)")
                     has_store_guardrail = True
-                except Exception as e: print(f"Failed to load Guardrail: {e}")
-    
-    # 2. PROCESS SAVEEASY SECOND
-    for item in files:
-        safe_name = item['name'].replace(" ", "_")
-        if "SaveEasy" in safe_name:
+                except: pass
+
+        elif "Pan_india" in safe_name: # NEW: Pan India Check
+            print(">>> Loading Pan India Guardrail...")
+            if download_file(item['id'], safe_name):
+                try:
+                    con.execute(f"CREATE OR REPLACE TABLE guardrail_pan_india AS SELECT * FROM read_csv_auto('{safe_name}', all_varchar=true, union_by_name=true)")
+                    has_pan_india = True
+                except: pass
+                
+        elif "SaveEasy" in safe_name:
             print(">>> Loading SaveEasy...")
             if download_file(item['id'], safe_name):
                 try:
                     con.execute(f"CREATE OR REPLACE TABLE save_easy AS SELECT * FROM read_csv_auto('{safe_name}', union_by_name=true)")
                     has_save_easy = True
-                except Exception as e: print(f"Failed to load SaveEasy: {e}")
+                except: pass
 
-    # 3. PROCESS MONTHLY FILES LAST
+    # 2. PROCESS MONTHLY FILES LAST
     print(">>> Loading Monthly Files...")
     for item in files:
         safe_name = item['name'].replace(" ", "_")
-        if "Store_Guardrail" in safe_name or "SaveEasy" in safe_name: continue
+        # Exclude all special files from the monthly bucket
+        if any(x in safe_name for x in ["Store_Guardrail", "SaveEasy", "Pan_india"]):
+            continue
             
         all_master_files.append(safe_name)
         if not os.path.exists(safe_name):
@@ -191,7 +200,9 @@ sql_query = """
         m.* FROM user_data u
     JOIN read_csv_auto('*.csv', filename=true, union_by_name=true) m 
       ON CAST(u.mem_nbr AS VARCHAR) = CAST(m."Membership_NBR" AS VARCHAR)
-    WHERE m.filename NOT LIKE '%SaveEasy%' AND m.filename NOT LIKE '%Store_Guardrail%'
+    WHERE m.filename NOT LIKE '%SaveEasy%' 
+      AND m.filename NOT LIKE '%Store_Guardrail%'
+      AND m.filename NOT LIKE '%Pan_india%'
 """
 
 final_rows_to_write = []
@@ -218,10 +229,9 @@ try:
             rca_text = ""
             status = "COMPLETED"
 
-            # --- SMART STORE NUMBER RETRIEVAL (PRIORITIZE INPUT) ---
+            # --- SMART STORE NUMBER RETRIEVAL ---
             input_store_val = ""
             try:
-                # 1. Get from Input
                 input_row = con.execute(f"SELECT store_nbr FROM user_data WHERE CAST(mem_nbr AS VARCHAR) = '{mem_id_str}'").fetchone()
                 if input_row and input_row[0]:
                     input_store_val = str(input_row[0]).replace('.0', '').strip()
@@ -229,7 +239,6 @@ try:
 
             matched_store_val = ""
             if not user_matches.empty:
-                # 2. Get from Monthly Match (Just for Name and Status)
                 first_record = user_matches.iloc[0]
                 for col in ['store_nbr', 'Store_NBR', 'Store', 'StoreId']:
                     if col in user_matches.columns:
@@ -237,11 +246,9 @@ try:
                         if val and str(val).lower() != 'nan':
                             matched_store_val = str(val).replace('.0', '').strip()
                             break
-                
                 name_val = first_record.get('User_Name', '') or first_record.get('mem_name', '')
                 status = "MATCH FOUND"
 
-            # CHANGED: Use Input Store if available. Fallback to Matched Store.
             store_val = input_store_val if input_store_val else matched_store_val
 
             if found_count == 0:
@@ -266,18 +273,33 @@ try:
                         if status == "COMPLETED": status = "MATCH FOUND (SaveEasy)"
                 except: pass
 
-            # --- 3. Store Guardrail Logic ---
+            # --- 3. Store Guardrail Logic (Store + Mem) ---
             if has_store_guardrail and store_val and mem_id_str:
                 combined_code = f"{store_val}{mem_id_str}"
                 try:
-                    # Check Column A ('Code')
                     check_sg = con.execute(f"SELECT COUNT(*) FROM store_guardrail WHERE TRIM(CAST(Code AS VARCHAR)) = '{combined_code}'").fetchone()
                     if check_sg[0] > 0:
                         rca_text += " - Member in Store Guardrail list"
-                except Exception as e:
-                    print(f"Error checking guardrail: {e}")
+                except: pass
 
-            # --- 4. Final Row ---
+            # --- 4. PAN INDIA GUARDRAIL LOGIC (NEW) ---
+            # Checks only Member Number in column "Membership no."
+            if has_pan_india:
+                try:
+                    # DuckDB handles headers with spaces by quoting them
+                    check_pi = con.execute(f"SELECT COUNT(*) FROM guardrail_pan_india WHERE CAST(\"Membership no.\" AS VARCHAR) = '{mem_id_str}'").fetchone()
+                    if check_pi[0] > 0:
+                        rca_text += " - member in Guardrail_Pan_india_list"
+                except Exception as e:
+                    # Fallback if column name was normalized (e.g. underscore instead of space)
+                    try:
+                        check_pi = con.execute(f"SELECT COUNT(*) FROM guardrail_pan_india WHERE CAST(Membership_no_ AS VARCHAR) = '{mem_id_str}'").fetchone()
+                        if check_pi[0] > 0:
+                            rca_text += " - member in Guardrail_Pan_india_list"
+                    except: 
+                        print(f"Error checking Pan India Guardrail: {e}")
+
+            # --- 5. Final Row ---
             final_rows_to_write.append([
                 REQUEST_ID,
                 found_location,
