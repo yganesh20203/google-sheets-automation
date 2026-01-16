@@ -27,6 +27,14 @@ FOLDER_ID = "1pjsuzA9bmQdltnvf21vZ0U4bZ75fUyWt"
 RESULTS_TAB_NAME = "Analysis_Results"
 QUEUE_TAB_NAME = "Request_Queue"
 
+# NEW: NSU Configuration (GID -> Column Letter)
+NSU_SPREADSHEET_ID = "1CHBcnNoVhW025l486C004VU7xHWgEQj6Xs7wkZXeelA"
+NSU_CONFIG = {
+    931173305: 'D',   # BDA ShortID
+    1119970190: 'M',  # BDA Short ID
+    899736083: 'G'    # Supervisor Short ID
+}
+
 # ==========================================
 # 2. HELPER FUNCTIONS
 # ==========================================
@@ -51,6 +59,50 @@ def download_file(file_id, output_path):
     except Exception as e:
         print(f"Error downloading {file_id}: {e}")
         return False
+
+def get_sales_team_ids():
+    """Fetches valid IDs from specific columns in the 3 Google Sheet tabs."""
+    valid_ids = set()
+    print(">>> Fetching Sales Team Data from Google Sheets...")
+    
+    try:
+        # 1. Get Sheet Names for the GIDs
+        meta = sheets_service.spreadsheets().get(spreadsheetId=NSU_SPREADSHEET_ID).execute()
+        sheets_info = meta.get('sheets', [])
+        
+        # 2. Iterate through our config and fetch specific columns
+        for sheet in sheets_info:
+            gid = sheet['properties']['sheetId']
+            title = sheet['properties']['title']
+            
+            if gid in NSU_CONFIG:
+                col_letter = NSU_CONFIG[gid]
+                # Construct Range: e.g. 'Sheet1!D:D'
+                range_name = f"'{title}'!{col_letter}:{col_letter}"
+                
+                print(f"Reading {range_name} (GID: {gid})...")
+                
+                try:
+                    result = sheets_service.spreadsheets().values().get(
+                        spreadsheetId=NSU_SPREADSHEET_ID, range=range_name).execute()
+                    rows = result.get('values', [])
+                    
+                    # 3. Process Rows
+                    for row in rows:
+                        if row: # If row is not empty
+                            val = str(row[0]).strip()
+                            # Skip likely headers
+                            if val and val.lower() not in ['bda shortid', 'bda short id', 'supervisor short id']:
+                                valid_ids.add(val)
+                except Exception as e:
+                    print(f"Error reading {range_name}: {e}")
+
+        print(f"Loaded {len(valid_ids)} unique Sales Team IDs.")
+        return valid_ids
+
+    except Exception as e:
+        print(f"Failed to fetch Sales Team Sheets: {e}")
+        return set()
 
 def write_values_to_sheet(values):
     """Writes consolidated rows to Analysis_Results"""
@@ -108,7 +160,7 @@ if download_file(INPUT_FILE_ID, 'user_input.json'):
         df_input = pd.DataFrame(raw)
         df_input.columns = [x.strip().lower() for x in df_input.columns]
         
-        # SMART FIX: Swap Name/ID if ID is missing but Name is numeric
+        # SMART FIX: Swap Name/ID
         if 'mem_nbr' in df_input.columns and 'mem_name' in df_input.columns:
             def fix_id(row):
                 val_id = str(row['mem_nbr']).strip()
@@ -129,11 +181,15 @@ if download_file(INPUT_FILE_ID, 'user_input.json'):
 else:
     con.execute("CREATE TABLE user_data (mem_nbr VARCHAR)")
 
-# --- B. LOAD MASTER FILES ---
+# --- B. LOAD EXTERNAL DATA (SALES TEAM) ---
+sales_team_ids = get_sales_team_ids()
+
+# --- C. LOAD MASTER FILES ---
 all_master_files = [] 
 has_save_easy = False
 has_store_guardrail = False
-has_pan_india = False # NEW FLAG
+has_pan_india = False
+has_4r_extraction = False 
 
 try:
     results = drive_service.files().list(
@@ -145,11 +201,19 @@ except: files = []
 if files:
     print(f"Found {len(files)} CSV files. Starting Sequence...")
     
-    # 1. PROCESS GUARDRAILS & SPECIAL FILES
+    # 1. SPECIAL FILES LOADING
     for item in files:
         safe_name = item['name'].replace(" ", "_")
         
-        if "Store_Guardrail" in safe_name and "Pan_india" not in safe_name:
+        if "4RExtraction" in safe_name: 
+            print(">>> Loading 4RExtraction...")
+            if download_file(item['id'], safe_name):
+                try:
+                    con.execute(f"CREATE OR REPLACE TABLE extraction_4r AS SELECT * FROM read_csv_auto('{safe_name}', all_varchar=true, union_by_name=true)")
+                    has_4r_extraction = True
+                except: pass
+
+        elif "Store_Guardrail" in safe_name and "Pan_india" not in safe_name:
             print(">>> Loading Store_Guardrail...")
             if download_file(item['id'], safe_name):
                 try:
@@ -157,8 +221,8 @@ if files:
                     has_store_guardrail = True
                 except: pass
 
-        elif "Pan_india" in safe_name: # NEW: Pan India Check
-            print(">>> Loading Pan India Guardrail...")
+        elif "Pan_india" in safe_name:
+            print(">>> Loading Pan India...")
             if download_file(item['id'], safe_name):
                 try:
                     con.execute(f"CREATE OR REPLACE TABLE guardrail_pan_india AS SELECT * FROM read_csv_auto('{safe_name}', all_varchar=true, union_by_name=true)")
@@ -173,14 +237,12 @@ if files:
                     has_save_easy = True
                 except: pass
 
-    # 2. PROCESS MONTHLY FILES LAST
+    # 2. MONTHLY FILES
     print(">>> Loading Monthly Files...")
     for item in files:
         safe_name = item['name'].replace(" ", "_")
-        # Exclude all special files from the monthly bucket
-        if any(x in safe_name for x in ["Store_Guardrail", "SaveEasy", "Pan_india"]):
+        if any(x in safe_name for x in ["Store_Guardrail", "SaveEasy", "Pan_india", "4RExtraction"]):
             continue
-            
         all_master_files.append(safe_name)
         if not os.path.exists(safe_name):
             download_file(item['id'], safe_name)
@@ -203,6 +265,7 @@ sql_query = """
     WHERE m.filename NOT LIKE '%SaveEasy%' 
       AND m.filename NOT LIKE '%Store_Guardrail%'
       AND m.filename NOT LIKE '%Pan_india%'
+      AND m.filename NOT LIKE '%4RExtraction%'
 """
 
 final_rows_to_write = []
@@ -215,7 +278,43 @@ try:
             mem_id_str = str(mem_id)
             user_matches = matches_df[matches_df['User_ID'] == mem_id_str]
             
-            # --- 1. Monthly File Logic ---
+            # ------------------------------------------------
+            # PHASE 1: NSU CHECK (Priority 1)
+            # ------------------------------------------------
+            nsu_text = ""
+            if has_4r_extraction:
+                try:
+                    # Look for ID in 4RExtraction
+                    qc_query = f"""
+                        SELECT "QC User ID" FROM extraction_4r 
+                        WHERE CAST("Membership Nbr" AS VARCHAR) = '{mem_id_str}'
+                        LIMIT 1
+                    """
+                    try:
+                        qc_res = con.execute(qc_query).fetchone()
+                    except:
+                        # Fallback for normalized column names
+                        qc_query = f"SELECT QC_User_ID FROM extraction_4r WHERE CAST(Membership_Nbr AS VARCHAR) = '{mem_id_str}' LIMIT 1"
+                        qc_res = con.execute(qc_query).fetchone()
+
+                    if qc_res:
+                        # Found in 4R, now check the Sales Team Sheets
+                        qc_user_id = str(qc_res[0]).strip()
+                        if qc_user_id in sales_team_ids:
+                            nsu_text = "found match, NSU member onboarded by sales team"
+                        else:
+                            nsu_text = "NSU member not onboarded by sales team"
+                    else:
+                        nsu_text = "not NSU member"
+                except Exception as e:
+                    print(f"NSU Check Error: {e}")
+                    nsu_text = "Error checking NSU status"
+            else:
+                nsu_text = "4RExtraction.csv not found"
+
+            # ------------------------------------------------
+            # PHASE 2: MONTHLY FILES
+            # ------------------------------------------------
             found_files = []
             if not user_matches.empty:
                 found_files = user_matches['Found_In_File'].unique().tolist()
@@ -226,10 +325,10 @@ try:
             found_location = "N/A"
             store_val = ""
             name_val = ""
-            rca_text = ""
+            monthly_text = ""
             status = "COMPLETED"
 
-            # --- SMART STORE NUMBER RETRIEVAL ---
+            # Smart Store Retrieval
             input_store_val = ""
             try:
                 input_row = con.execute(f"SELECT store_nbr FROM user_data WHERE CAST(mem_nbr AS VARCHAR) = '{mem_id_str}'").fetchone()
@@ -252,54 +351,59 @@ try:
             store_val = input_store_val if input_store_val else matched_store_val
 
             if found_count == 0:
-                rca_text = "Member not found in any monthly file."
+                monthly_text = "Member not found in any monthly file."
                 found_location = "N/A"
             elif found_count == total_files:
-                rca_text = "Found in all monthly files."
+                monthly_text = "Found in all monthly files."
                 found_location = "All Monthly Files"
             else:
                 missing_files = list(set(all_master_files) - set(found_files))
                 missing_files.sort(key=get_file_date)
                 latest_missing = missing_files[-1]
-                rca_text = f"Member not found in {latest_missing}"
+                monthly_text = f"Member not found in {latest_missing}"
                 found_location = "Multiple Files"
 
-            # --- 2. SaveEasy Logic ---
+            # ------------------------------------------------
+            # PHASE 3: GUARDRAILS
+            # ------------------------------------------------
+            guardrail_text = ""
+            
+            # SaveEasy
             if has_save_easy:
                 try:
                     check_se = con.execute(f"SELECT COUNT(*) FROM save_easy WHERE CAST(MembershipNBR AS VARCHAR) = '{mem_id_str}'").fetchone()
                     if check_se[0] > 0:
-                        rca_text += " - SaveEasy Member" 
+                        guardrail_text += " - SaveEasy Member" 
                         if status == "COMPLETED": status = "MATCH FOUND (SaveEasy)"
                 except: pass
 
-            # --- 3. Store Guardrail Logic (Store + Mem) ---
+            # Store Guardrail
             if has_store_guardrail and store_val and mem_id_str:
                 combined_code = f"{store_val}{mem_id_str}"
                 try:
                     check_sg = con.execute(f"SELECT COUNT(*) FROM store_guardrail WHERE TRIM(CAST(Code AS VARCHAR)) = '{combined_code}'").fetchone()
                     if check_sg[0] > 0:
-                        rca_text += " - Member in Store Guardrail list"
+                        guardrail_text += " - Member in Store Guardrail list"
                 except: pass
 
-            # --- 4. PAN INDIA GUARDRAIL LOGIC (NEW) ---
-            # Checks only Member Number in column "Membership no."
+            # Pan India
             if has_pan_india:
                 try:
-                    # DuckDB handles headers with spaces by quoting them
                     check_pi = con.execute(f"SELECT COUNT(*) FROM guardrail_pan_india WHERE CAST(\"Membership no.\" AS VARCHAR) = '{mem_id_str}'").fetchone()
                     if check_pi[0] > 0:
-                        rca_text += " - member in Guardrail_Pan_india_list"
-                except Exception as e:
-                    # Fallback if column name was normalized (e.g. underscore instead of space)
+                        guardrail_text += " - member in Guardrail_Pan_india_list"
+                except:
                     try:
-                        check_pi = con.execute(f"SELECT COUNT(*) FROM guardrail_pan_india WHERE CAST(Membership_no_ AS VARCHAR) = '{mem_id_str}'").fetchone()
-                        if check_pi[0] > 0:
-                            rca_text += " - member in Guardrail_Pan_india_list"
-                    except: 
-                        print(f"Error checking Pan India Guardrail: {e}")
+                         check_pi = con.execute(f"SELECT COUNT(*) FROM guardrail_pan_india WHERE CAST(Membership_no_ AS VARCHAR) = '{mem_id_str}'").fetchone()
+                         if check_pi[0] > 0:
+                             guardrail_text += " - member in Guardrail_Pan_india_list"
+                    except: pass
 
-            # --- 5. Final Row ---
+            # ------------------------------------------------
+            # PHASE 4: COMBINE & WRITE
+            # ------------------------------------------------
+            final_rca = f"{nsu_text} - {monthly_text}{guardrail_text}"
+
             final_rows_to_write.append([
                 REQUEST_ID,
                 found_location,
@@ -307,7 +411,7 @@ try:
                 mem_id_str,
                 name_val,
                 status,
-                rca_text
+                final_rca
             ])
 
     else:
