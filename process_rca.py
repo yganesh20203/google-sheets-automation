@@ -129,7 +129,7 @@ if download_file(INPUT_FILE_ID, 'user_input.json'):
 else:
     con.execute("CREATE TABLE user_data (mem_nbr VARCHAR)")
 
-# --- B. LOAD MASTER FILES (ORDER: GUARDRAIL -> SAVEEASY -> MONTHLY) ---
+# --- B. LOAD MASTER FILES ---
 all_master_files = [] 
 has_save_easy = False
 has_store_guardrail = False 
@@ -151,7 +151,6 @@ if files:
             print(">>> Loading Store_Guardrail...")
             if download_file(item['id'], safe_name):
                 try:
-                    # Load as ALL VARCHAR to protect the Codes
                     con.execute(f"CREATE OR REPLACE TABLE store_guardrail AS SELECT * FROM read_csv_auto('{safe_name}', all_varchar=true, union_by_name=true)")
                     has_store_guardrail = True
                 except Exception as e: print(f"Failed to load Guardrail: {e}")
@@ -171,10 +170,7 @@ if files:
     print(">>> Loading Monthly Files...")
     for item in files:
         safe_name = item['name'].replace(" ", "_")
-        
-        # Skip the special files we just handled
-        if "Store_Guardrail" in safe_name or "SaveEasy" in safe_name:
-            continue
+        if "Store_Guardrail" in safe_name or "SaveEasy" in safe_name: continue
             
         all_master_files.append(safe_name)
         if not os.path.exists(safe_name):
@@ -222,9 +218,10 @@ try:
             rca_text = ""
             status = "COMPLETED"
 
-            # --- SMART STORE NUMBER RETRIEVAL ---
+            # --- SMART STORE NUMBER RETRIEVAL (PRIORITIZE INPUT) ---
             input_store_val = ""
             try:
+                # 1. Get from Input
                 input_row = con.execute(f"SELECT store_nbr FROM user_data WHERE CAST(mem_nbr AS VARCHAR) = '{mem_id_str}'").fetchone()
                 if input_row and input_row[0]:
                     input_store_val = str(input_row[0]).replace('.0', '').strip()
@@ -232,6 +229,7 @@ try:
 
             matched_store_val = ""
             if not user_matches.empty:
+                # 2. Get from Monthly Match (Just for Name and Status)
                 first_record = user_matches.iloc[0]
                 for col in ['store_nbr', 'Store_NBR', 'Store', 'StoreId']:
                     if col in user_matches.columns:
@@ -243,8 +241,8 @@ try:
                 name_val = first_record.get('User_Name', '') or first_record.get('mem_name', '')
                 status = "MATCH FOUND"
 
-            # Priority: Monthly File Store > Input Store
-            store_val = matched_store_val if matched_store_val else input_store_val
+            # CHANGED: Use Input Store if available. Fallback to Matched Store.
+            store_val = input_store_val if input_store_val else matched_store_val
 
             if found_count == 0:
                 rca_text = "Member not found in any monthly file."
