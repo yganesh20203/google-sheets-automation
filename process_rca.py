@@ -251,9 +251,26 @@ try:
             final_store = input_store if input_store else matched_store
             final_name = input_name if input_name else matched_name
 
+            # --- FETCH SALES DATA (NEW) ---
+            sales_info_str = "No Data"
+            if has_member_sales:
+                try:
+                    sales_q = f"""
+                        SELECT 
+                            Current_Month, Month_Minus_1, Month_Minus_2, 
+                            Month_Minus_3, Month_Minus_4, Month_Minus_5, Month_Minus_6
+                        FROM member_sales 
+                        WHERE CAST(MEMBERSHIP_NBR AS VARCHAR) = '{mem_id_str}'
+                        ORDER BY Current_Month DESC 
+                        LIMIT 1
+                    """
+                    sales_row = con.execute(sales_q).fetchone()
+                    if sales_row:
+                        # Format: "Curr: 100 | M-1: 50 | M-2: 0..."
+                        sales_info_str = f"Curr: {sales_row[0]} | M-1: {sales_row[1]} | M-2: {sales_row[2]} | M-3: {sales_row[3]} | M-4: {sales_row[4]} | M-5: {sales_row[5]} | M-6: {sales_row[6]}"
+                except: pass
+
             # --- 1. GATHER ALL FLAGS ---
-            
-            # A. Current Month Status & BU Logic
             flag_in_current_beat = False
             current_month_store_nbr = ""
             file_sub_cat = ""
@@ -273,7 +290,6 @@ try:
                             val = current_row.get(col)
                             if val: file_sub_cat = str(val).strip().lower(); break
 
-            # B. NSU Status
             flag_is_nsu = False
             flag_nsu_sales_team = False 
             if has_4r_extraction:
@@ -288,7 +304,6 @@ try:
                             flag_nsu_sales_team = True
                 except: pass
 
-            # C. SaveEasy
             flag_save_easy = False
             if has_save_easy:
                 try:
@@ -296,11 +311,9 @@ try:
                         flag_save_easy = True
                 except: pass
 
-            # D. Store Guardrail & ZBDA
             flag_store_guard = False
             zbda_sales_val = 0
             zbda_store_val = ""
-            
             if has_store_guardrail and final_store and mem_id_str:
                 try:
                     if con.execute(f"SELECT COUNT(*) FROM store_guardrail WHERE TRIM(CAST(Code AS VARCHAR)) = '{final_store}{mem_id_str}'").fetchone()[0] > 0:
@@ -316,7 +329,6 @@ try:
                                 zbda_sales_val = zbda_res[1] if zbda_res[1] is not None else 0
                 except: pass
 
-            # E. Pan India
             flag_pan_india = False
             if has_pan_india:
                 try:
@@ -328,7 +340,6 @@ try:
                             flag_pan_india = True
                     except: pass
 
-            # F. E-Commerce (ZECM)
             flag_zecm_active = False
             if has_member_sales:
                 try:
@@ -337,7 +348,6 @@ try:
                         flag_zecm_active = True
                 except: pass
 
-            # G. History (Last Active)
             latest_missing_month = "N/A"
             found_files = []
             if not user_matches.empty: found_files = user_matches['Found_In_File'].unique().tolist()
@@ -347,18 +357,16 @@ try:
                 latest_missing_month = missing_files[-1]
 
             # ==========================================================
-            # 2. DECISION TREE (THE FINAL RCA LOGIC)
+            # 2. DECISION TREE
             # ==========================================================
             
             final_display_rca = ""
             final_status = "COMPLETED"
 
-            # 1. SaveEasy Check (Highest Priority REJECT)
             if flag_save_easy:
                 final_display_rca = "REJECT: SaveEasy active member cannot be added to the Beat"
                 final_status = "MATCH FOUND (SaveEasy)"
 
-            # 2. Current Beat Plan Check
             elif flag_in_current_beat:
                 if input_sub_cat and file_sub_cat:
                     if input_sub_cat == file_sub_cat:
@@ -378,7 +386,6 @@ try:
                     final_display_rca = "REJECT: Member already in Beat"
                 final_status = "MATCH FOUND"
 
-            # 3. Store Guardrail Check
             elif flag_store_guard:
                 if zbda_sales_val > 0:
                     final_display_rca = "REJECT: Member already in Store gradrail list cannot be added in beat"
@@ -387,35 +394,30 @@ try:
                     final_display_rca = f"ACTION: Member in Store gradrail list get permission by {target_store} store manager"
                 final_status = "MATCH FOUND (Guardrail)"
 
-            # 4. Pan India Check
             elif flag_pan_india:
                 final_display_rca = "ACTION: Member already in Pan bharat file get market manager approval to add in beat"
                 final_status = "MATCH FOUND (Pan India)"
 
-            # 5. E-Commerce Check
             elif flag_zecm_active:
                 final_display_rca = "ACTION: Ecom member get approval from Ecom team"
 
-            # 6. NSU Logic
             elif flag_is_nsu:
                 if flag_nsu_sales_team:
                     final_display_rca = "PROCEED: NSU member will be added to the beat"
                 else:
                     final_display_rca = "ACTION: NSU member onboarded by store team get store manger approval to add in beat"
 
-            # 7. Clean Case (Re-activation / New / Unknown)
             else:
                 if latest_missing_month != "N/A":
-                    # Was in historical files, but not current -> Re-add
                     final_display_rca = f"PROCEED: Member will be added in beat (Last excluded: {latest_missing_month})"
                 else:
-                    # Not in ANY database (Truly unknown) -> REJECT as per new requirement
                     final_display_rca = "REJECT: Given member not found please check the member nbr and reenter it"
                     final_status = "ERROR"
 
             # --- WRITE ROW ---
             found_location_val = "Current Beat" if flag_in_current_beat else ("Historical Files" if len(found_files)>0 else "N/A")
             
+            # APPENED sales_info_str AT THE END
             final_rows_to_write.append([
                 REQUEST_ID,
                 found_location_val,
@@ -423,14 +425,15 @@ try:
                 mem_id_str,
                 final_name,
                 final_status,
-                final_display_rca
+                final_display_rca,
+                sales_info_str  # <--- NEW COLUMN
             ])
     else:
-        final_rows_to_write.append([REQUEST_ID, "N/A", "", "", "", "ERROR", "No Master Files Found"])
+        final_rows_to_write.append([REQUEST_ID, "N/A", "", "", "", "ERROR", "No Master Files Found", ""])
 
 except Exception as e:
     print(f"Error: {e}")
-    final_rows_to_write.append([REQUEST_ID, "N/A", "", "", "", "ERROR", str(e)])
+    final_rows_to_write.append([REQUEST_ID, "N/A", "", "", "", "ERROR", str(e), ""])
 
 write_values_to_sheet(final_rows_to_write)
 print("Done.")
