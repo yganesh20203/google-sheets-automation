@@ -1,7 +1,3 @@
-# ==============================================================================
-# AUTOMATED BUSINESS INTELLIGENCE ENGINE (GOOGLE DRIVE + ADVANCED EXCEL REPORTING)
-# ==============================================================================
-
 import datetime
 import zipfile
 import io
@@ -9,7 +5,6 @@ import os
 import gc
 from io import BytesIO
 
-# Data Handling Libraries
 import pandas as pd
 import numpy as np
 import openpyxl 
@@ -23,6 +18,7 @@ from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 import google.auth
 
 # --- LOGGING UTILITY ---
+
 def log(message):
     """Prints a message with a timestamp for debugging/logs."""
     timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -225,11 +221,11 @@ def process_overall_instock(df):
 
 def process_lmtd_logic(df_lmtd, calc_date):
     """
-    Calculates LMTD Sales by summing columns Sales_December_01 to Sales_December_{yesterday}.
-    Creates a key: STORE_NBR + ITEM_NUMBER.
+    1. Calculates LMTD Sales (Partial month: 1st to Yesterday)
+    2. Calculates LM Sales (Full month: Sum of entire December)
     """
     if df_lmtd is None: return None
-    log("    > Calculating LMTD Sales from December data...")
+    log("    > Calculating LMTD & LM Sales from December data...")
     try:
         if 'STORE_NBR' in df_lmtd.columns and 'ITEM_NUMBER' in df_lmtd.columns:
             s_store = pd.to_numeric(df_lmtd['STORE_NBR'], errors='coerce').fillna(0).astype('int64').astype(str)
@@ -239,19 +235,28 @@ def process_lmtd_logic(df_lmtd, calc_date):
             log("    [ERROR] STORE_NBR or ITEM_NUMBER missing in Dec Sales file.")
             return None
 
+        # --- 1. LMTD (Partial Month) ---
         day_limit = calc_date.day 
-        cols_to_sum = []
+        cols_lmtd = []
         for d in range(1, day_limit + 1):
             col_name = f"Sales_December_{d:02d}"
             if col_name in df_lmtd.columns:
-                cols_to_sum.append(col_name)
+                cols_lmtd.append(col_name)
         
-        if not cols_to_sum:
+        if not cols_lmtd:
             df_lmtd['LMTD Sales'] = 0
         else:
-            df_lmtd['LMTD Sales'] = df_lmtd[cols_to_sum].apply(pd.to_numeric, errors='coerce').sum(axis=1)
+            df_lmtd['LMTD Sales'] = df_lmtd[cols_lmtd].apply(pd.to_numeric, errors='coerce').sum(axis=1)
 
-        return df_lmtd[['LMTD_Key', 'LMTD Sales']]
+        # --- 2. LM Sales (Full Month) ---
+        # Select ALL columns that start with 'Sales_December_'
+        cols_lm = [c for c in df_lmtd.columns if c.startswith('Sales_December_')]
+        if not cols_lm:
+            df_lmtd['LM Sales'] = 0
+        else:
+            df_lmtd['LM Sales'] = df_lmtd[cols_lm].apply(pd.to_numeric, errors='coerce').sum(axis=1)
+
+        return df_lmtd[['LMTD_Key', 'LMTD Sales', 'LM Sales']]
 
     except Exception as e:
         log(f"    [ERROR] LMTD Calculation failed: {e}")
@@ -259,11 +264,11 @@ def process_lmtd_logic(df_lmtd, calc_date):
 
 def process_lytd_logic(df_lytd, calc_date):
     """
-    Calculates LYTD Sales by summing columns Sales_Jan_01 to Sales_Jan_{yesterday}.
-    Creates a key: STORE_NBR + ITEM_NUMBER.
+    1. Calculates LYTD Sales (Partial month: 1st to Yesterday in Jan 2025)
+    2. Calculates LYM Sales (Full month: Sum of entire Jan 2025)
     """
     if df_lytd is None: return None
-    log("    > Calculating LYTD Sales from Jan 2025 data...")
+    log("    > Calculating LYTD & LYM Sales from Jan 2025 data...")
     try:
         # 1. Create Key
         if 'STORE_NBR' in df_lytd.columns and 'ITEM_NUMBER' in df_lytd.columns:
@@ -274,22 +279,28 @@ def process_lytd_logic(df_lytd, calc_date):
             log("    [ERROR] STORE_NBR or ITEM_NUMBER missing in Jan 2025 Sales file.")
             return None
 
-        # 2. Determine Columns to Sum (Sales_Jan_01 to Sales_Jan_{day})
+        # --- 1. LYTD (Partial Month) ---
         day_limit = calc_date.day 
-        cols_to_sum = []
+        cols_lytd = []
         for d in range(1, day_limit + 1):
             col_name = f"Sales_Jan_{d:02d}" 
             if col_name in df_lytd.columns:
-                cols_to_sum.append(col_name)
+                cols_lytd.append(col_name)
         
-        if not cols_to_sum:
-            log("    [WARN] No matching date columns found in Jan 2025 Sales file.")
+        if not cols_lytd:
             df_lytd['LYTD Sales'] = 0
         else:
-            # 3. Calculate Sum
-            df_lytd['LYTD Sales'] = df_lytd[cols_to_sum].apply(pd.to_numeric, errors='coerce').sum(axis=1)
+            df_lytd['LYTD Sales'] = df_lytd[cols_lytd].apply(pd.to_numeric, errors='coerce').sum(axis=1)
 
-        return df_lytd[['LYTD_Key', 'LYTD Sales']]
+        # --- 2. LYM Sales (Full Month) ---
+        # Select ALL columns that start with 'Sales_Jan_'
+        cols_lym = [c for c in df_lytd.columns if c.startswith('Sales_Jan_')]
+        if not cols_lym:
+            df_lytd['LYM Sales'] = 0
+        else:
+            df_lytd['LYM Sales'] = df_lytd[cols_lym].apply(pd.to_numeric, errors='coerce').sum(axis=1)
+
+        return df_lytd[['LYTD_Key', 'LYTD Sales', 'LYM Sales']]
 
     except Exception as e:
         log(f"    [ERROR] LYTD Calculation failed: {e}")
@@ -344,16 +355,18 @@ def process_article_sales_report(df, df_hirarchy, df_div, df_instock, df_gst, df
             ytd_cols = [c for c in ['Article UID', '2021 YTD Sales', '2022 YTD Sales', '2023 YTD Sales', '2024 YTD Sales', '2025 YTD Sales'] if c in df_ytd.columns]
             df = df.merge(df_ytd[ytd_cols], on='Article UID', how='left')
 
-        # 7. Merge LMTD Sales
+        # 7. Merge LMTD Sales AND LM Sales
         if df_lmtd is not None and 'Article UID' in df.columns:
              df = df.merge(df_lmtd, left_on='Article UID', right_on='LMTD_Key', how='left')
              df['LMTD Sales'] = df['LMTD Sales'].fillna(0)
+             df['LM Sales'] = df['LM Sales'].fillna(0) # Fill NaN for new column
              df.drop(columns=['LMTD_Key'], inplace=True, errors='ignore')
 
-        # 8. Merge LYTD Sales
+        # 8. Merge LYTD Sales AND LYM Sales
         if df_lytd is not None and 'Article UID' in df.columns:
              df = df.merge(df_lytd, left_on='Article UID', right_on='LYTD_Key', how='left')
              df['LYTD Sales'] = df['LYTD Sales'].fillna(0)
+             df['LYM Sales'] = df['LYM Sales'].fillna(0) # Fill NaN for new column
              df.drop(columns=['LYTD_Key'], inplace=True, errors='ignore')
 
         # 9. Calculate Average Sales & Day On Hand
@@ -386,7 +399,7 @@ def process_article_sales_report(df, df_hirarchy, df_div, df_instock, df_gst, df
         if 'Store' in df.columns: 
             df = df[df['Store'].astype(str).str.strip().str.lower() != 'lucknow fc']
 
-        # 11. REORDER COLUMNS
+        # 11. REORDER COLUMNS - Added LM Sales and LYM Sales here
         desired_order = [
             "Article No", "Article UID", "Store No", "Store", "Region", "Market Manager",
             "Article Description", "Brand Name", "Article Type", "PB_FLAG", "Base Unit of Measurement",
@@ -399,7 +412,8 @@ def process_article_sales_report(df, df_hirarchy, df_div, df_instock, df_gst, df
             "MTD COST Amt", "MTD IM %", "YTD Qty", "YTD Sale Amt", "YTD COST Amt", "YTD IM %",
             "GST_Change", "2021 YTD Sales", "2022 YTD Sales", "2023 YTD Sales", "2024 YTD Sales",
             "2025 YTD Sales", "YTD Avg Sales", "2021 Avg Sales", "2022 Avg Sales", "2023 Avg Sales",
-            "2024 Avg Sales", "2025 Avg Sales", "Day On Hand", "LMTD Sales", "LYTD Sales", "Final Remarks"
+            "2024 Avg Sales", "2025 Avg Sales", "Day On Hand", 
+            "LMTD Sales", "LM Sales", "LYTD Sales", "LYM Sales", "Final Remarks"
         ]
         
         final_columns = [col for col in desired_order if col in df.columns]
@@ -427,9 +441,12 @@ def generate_excel_insights_report(df, date_str):
     
     output = BytesIO()
     
-    # Force Numeric for Calculations
-    numeric_cols = ['YTD Sale Amt', 'FTD Sale Amt', 'On Hand Cost', 'YTD Avg Sales', 
-                    'Day On Hand', 'MTD Sale Amt', 'LMTD Sales', 'LYTD Sales']
+    # Force Numeric for Calculations - ADDED NEW COLS HERE
+    numeric_cols = [
+        'YTD Sale Amt', 'FTD Sale Amt', 'On Hand Cost', 'YTD Avg Sales', 
+        'Day On Hand', 'MTD Sale Amt', 'LMTD Sales', 'LYTD Sales',
+        'LM Sales', 'LYM Sales' 
+    ]
     for col in numeric_cols:
         if col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
