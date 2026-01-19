@@ -205,7 +205,6 @@ if files:
         if not os.path.exists(safe_name): download_file(item['id'], safe_name)
     all_master_files.sort(key=get_file_date)
 
-    # IDENTIFY CURRENT MONTH FILE (The latest one, e.g., Jan_26)
     current_month_file = all_master_files[-1] if all_master_files else None
     print(f"Current Month File identified as: {current_month_file}")
 
@@ -214,7 +213,6 @@ if files:
 # ==========================================
 print("Running Analysis...")
 
-# Union of all monthly files (including current month)
 sql_query = """
     SELECT 
         CAST(u.mem_nbr AS VARCHAR) AS User_ID,
@@ -240,14 +238,12 @@ try:
             mem_id_str = str(mem_id)
             user_matches = matches_df[matches_df['User_ID'] == mem_id_str]
             
-            # --- PREPARE BASIC DETAILS ---
-            # Retrieve Store, Name, SubCat from Input
+            # --- DETAILS ---
             input_details = con.execute(f"SELECT store_nbr, mem_name, sub_cat_name FROM user_data WHERE CAST(mem_nbr AS VARCHAR) = '{mem_id_str}'").fetchone()
             input_store = str(input_details[0] if input_details else "").replace('.0', '').strip()
             input_name = input_details[1] if input_details else ""
             input_sub_cat = str(input_details[2] if input_details and input_details[2] else "").strip().lower()
 
-            # Retrieve from Matches (Fallback)
             matched_store = ""
             matched_name = ""
             if not user_matches.empty:
@@ -262,16 +258,12 @@ try:
             final_name = input_name if input_name else matched_name
 
             # ==========================================================
-            # PRIORITY 1: CURRENT MONTH SUB-CAT CHECK
+            # PRIORITY 1: CURRENT MONTH
             # ==========================================================
             current_month_status = None
             if current_month_file:
-                # Check if member exists in the Current Month File specifically
                 current_match = user_matches[user_matches['Found_In_File'] == current_month_file]
-                
                 if not current_match.empty:
-                    # Member Found in Current Month -> Check Sub Category
-                    # We look for common Sub Cat column names
                     file_sub_cat = ""
                     current_row = current_match.iloc[0]
                     for col in ['Sub Cat Name', 'Sub_Cat_Name', 'Sub Category', 'Sub_Category', 'sub_cat_name']:
@@ -280,28 +272,21 @@ try:
                             if val: file_sub_cat = str(val).strip().lower(); break
                     
                     if file_sub_cat and input_sub_cat:
-                        if file_sub_cat == input_sub_cat:
-                            current_month_status = "Member already present in beat"
-                        else:
-                            current_month_status = f"Member already in different BU ({file_sub_cat})"
+                        if file_sub_cat == input_sub_cat: current_month_status = "Member already present in beat"
+                        else: current_month_status = f"Member already in different BU ({file_sub_cat})"
                     elif not input_sub_cat:
-                        # Fallback if user didn't provide sub cat but member found
                         current_month_status = "Member already present in beat (No Input Sub-Cat)"
 
             # ==========================================================
-            # DECISION LOGIC
+            # PRIORITY 2: RCA CASCADE
             # ==========================================================
-            
             final_rca = ""
             final_status = "COMPLETED"
 
             if current_month_status:
-                # STOP Analysis here if found in current month
                 final_rca = current_month_status
                 final_status = "MATCH FOUND"
             else:
-                # PROCEED with Full Analysis (NSU -> History -> Guardrails)
-                
                 # 1. NSU Check
                 nsu_text = ""
                 if has_4r_extraction:
@@ -320,16 +305,13 @@ try:
                 # 2. Monthly History
                 found_files = []
                 if not user_matches.empty: found_files = user_matches['Found_In_File'].unique().tolist()
-                
                 found_count = len(found_files)
                 total_files = len(all_master_files)
-                
                 monthly_text = ""
                 found_loc = "N/A"
                 if found_count > 0: final_status = "MATCH FOUND"
 
-                if found_count == 0:
-                    monthly_text = "Member not found in any monthly file."
+                if found_count == 0: monthly_text = "Member not found in any monthly file."
                 elif found_count == total_files:
                     monthly_text = "Found in all monthly files."
                     found_loc = "All Monthly Files"
@@ -340,20 +322,26 @@ try:
                     monthly_text = f"Member not found in {latest_missing}"
                     found_loc = "Multiple Files"
 
-                # 3. Guardrails & Ecom
+                # 3. Guardrails
                 guardrail_text = ""
+                
+                # A. SaveEasy
                 if has_save_easy:
                     try:
                         if con.execute(f"SELECT COUNT(*) FROM save_easy WHERE CAST(MembershipNBR AS VARCHAR) = '{mem_id_str}'").fetchone()[0] > 0:
                             guardrail_text += " - SaveEasy Member"
                     except: pass
                 
+                # B. Store Guardrail & ZBDA Check
+                is_store_guardrailed = False
                 if has_store_guardrail and final_store and mem_id_str:
                     try:
                         if con.execute(f"SELECT COUNT(*) FROM store_guardrail WHERE TRIM(CAST(Code AS VARCHAR)) = '{final_store}{mem_id_str}'").fetchone()[0] > 0:
                             guardrail_text += " - Member in Store Guardrail list"
+                            is_store_guardrailed = True
                     except: pass
-
+                
+                # C. Pan India
                 if has_pan_india:
                     try:
                         if con.execute(f"SELECT COUNT(*) FROM guardrail_pan_india WHERE CAST(\"Membership no.\" AS VARCHAR) = '{mem_id_str}'").fetchone()[0] > 0:
@@ -364,12 +352,37 @@ try:
                                 guardrail_text += " - member in Guardrail_Pan_india_list"
                         except: pass
 
+                # 4. Member Sales Checks (Ecom & ZBDA)
                 if has_member_sales:
+                    # Ecom Check
                     try:
                         sales_res = con.execute(f"SELECT SUM(Current_Month + Month_Minus_1 + Month_Minus_2 + Month_Minus_3 + Month_Minus_4 + Month_Minus_5 + Month_Minus_6) FROM member_sales WHERE CAST(MEMBERSHIP_NBR AS VARCHAR) = '{mem_id_str}' AND CHANNEL_TYPE = 'ZECM'").fetchone()
                         if sales_res and sales_res[0] and sales_res[0] > 0:
                             guardrail_text += " - Ecom member need approval from Ecom team"
                     except: pass
+
+                    # NEW: ZBDA Zero-Sales Check (If Guardrailed)
+                    if is_store_guardrailed:
+                        try:
+                            # Fetch Store and Sales Sum
+                            zbda_query = f"""
+                                SELECT 
+                                    CAST(STORE_NUMBER AS VARCHAR),
+                                    (Current_Month + Month_Minus_1 + Month_Minus_2 + Month_Minus_3 + Month_Minus_4 + Month_Minus_5 + Month_Minus_6)
+                                FROM member_sales
+                                WHERE CAST(MEMBERSHIP_NBR AS VARCHAR) = '{mem_id_str}'
+                                  AND CHANNEL_TYPE = 'ZBDA'
+                                LIMIT 1
+                            """
+                            zbda_res = con.execute(zbda_query).fetchone()
+                            
+                            if zbda_res:
+                                sales_store = str(zbda_res[0]).replace('.0', '').strip()
+                                total_sales = zbda_res[1] if zbda_res[1] is not None else 0
+                                
+                                if total_sales == 0:
+                                    guardrail_text += f" - get store manager approval from {sales_store}"
+                        except Exception as e: print(f"ZBDA Check Error: {e}")
 
                 final_rca = f"{nsu_text} - {monthly_text}{guardrail_text}"
 
