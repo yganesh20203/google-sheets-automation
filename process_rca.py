@@ -27,7 +27,7 @@ FOLDER_ID = "1pjsuzA9bmQdltnvf21vZ0U4bZ75fUyWt"
 RESULTS_TAB_NAME = "Analysis_Results"
 QUEUE_TAB_NAME = "Request_Queue"
 
-# NEW: NSU Configuration (GID -> Column Letter)
+# NEW: NSU Configuration
 NSU_SPREADSHEET_ID = "1CHBcnNoVhW025l486C004VU7xHWgEQj6Xs7wkZXeelA"
 NSU_CONFIG = {
     931173305: 'D',   # BDA ShortID
@@ -66,32 +66,24 @@ def get_sales_team_ids():
     print(">>> Fetching Sales Team Data from Google Sheets...")
     
     try:
-        # 1. Get Sheet Names for the GIDs
         meta = sheets_service.spreadsheets().get(spreadsheetId=NSU_SPREADSHEET_ID).execute()
         sheets_info = meta.get('sheets', [])
         
-        # 2. Iterate through our config and fetch specific columns
         for sheet in sheets_info:
             gid = sheet['properties']['sheetId']
             title = sheet['properties']['title']
             
             if gid in NSU_CONFIG:
                 col_letter = NSU_CONFIG[gid]
-                # Construct Range: e.g. 'Sheet1!D:D'
                 range_name = f"'{title}'!{col_letter}:{col_letter}"
-                
-                print(f"Reading {range_name} (GID: {gid})...")
                 
                 try:
                     result = sheets_service.spreadsheets().values().get(
                         spreadsheetId=NSU_SPREADSHEET_ID, range=range_name).execute()
                     rows = result.get('values', [])
-                    
-                    # 3. Process Rows
                     for row in rows:
-                        if row: # If row is not empty
+                        if row:
                             val = str(row[0]).strip()
-                            # Skip likely headers
                             if val and val.lower() not in ['bda shortid', 'bda short id', 'supervisor short id']:
                                 valid_ids.add(val)
                 except Exception as e:
@@ -189,7 +181,8 @@ all_master_files = []
 has_save_easy = False
 has_store_guardrail = False
 has_pan_india = False
-has_4r_extraction = False 
+has_4r_extraction = False
+has_member_sales = False # NEW FLAG
 
 try:
     results = drive_service.files().list(
@@ -211,6 +204,16 @@ if files:
                 try:
                     con.execute(f"CREATE OR REPLACE TABLE extraction_4r AS SELECT * FROM read_csv_auto('{safe_name}', all_varchar=true, union_by_name=true)")
                     has_4r_extraction = True
+                except: pass
+        
+        # NEW: Memberwise Sales
+        elif "Memberwise_sales" in safe_name:
+            print(">>> Loading Memberwise Sales...")
+            if download_file(item['id'], safe_name):
+                try:
+                    # Load as auto-detected types so we can sum the numbers
+                    con.execute(f"CREATE OR REPLACE TABLE member_sales AS SELECT * FROM read_csv_auto('{safe_name}', union_by_name=true)")
+                    has_member_sales = True
                 except: pass
 
         elif "Store_Guardrail" in safe_name and "Pan_india" not in safe_name:
@@ -241,7 +244,7 @@ if files:
     print(">>> Loading Monthly Files...")
     for item in files:
         safe_name = item['name'].replace(" ", "_")
-        if any(x in safe_name for x in ["Store_Guardrail", "SaveEasy", "Pan_india", "4RExtraction"]):
+        if any(x in safe_name for x in ["Store_Guardrail", "SaveEasy", "Pan_india", "4RExtraction", "Memberwise_sales"]):
             continue
         all_master_files.append(safe_name)
         if not os.path.exists(safe_name):
@@ -266,6 +269,7 @@ sql_query = """
       AND m.filename NOT LIKE '%Store_Guardrail%'
       AND m.filename NOT LIKE '%Pan_india%'
       AND m.filename NOT LIKE '%4RExtraction%'
+      AND m.filename NOT LIKE '%Memberwise_sales%'
 """
 
 final_rows_to_write = []
@@ -279,12 +283,11 @@ try:
             user_matches = matches_df[matches_df['User_ID'] == mem_id_str]
             
             # ------------------------------------------------
-            # PHASE 1: NSU CHECK (Priority 1)
+            # PHASE 1: NSU CHECK
             # ------------------------------------------------
             nsu_text = ""
             if has_4r_extraction:
                 try:
-                    # Look for ID in 4RExtraction
                     qc_query = f"""
                         SELECT "QC User ID" FROM extraction_4r 
                         WHERE CAST("Membership Nbr" AS VARCHAR) = '{mem_id_str}'
@@ -293,12 +296,10 @@ try:
                     try:
                         qc_res = con.execute(qc_query).fetchone()
                     except:
-                        # Fallback for normalized column names
                         qc_query = f"SELECT QC_User_ID FROM extraction_4r WHERE CAST(Membership_Nbr AS VARCHAR) = '{mem_id_str}' LIMIT 1"
                         qc_res = con.execute(qc_query).fetchone()
 
                     if qc_res:
-                        # Found in 4R, now check the Sales Team Sheets
                         qc_user_id = str(qc_res[0]).strip()
                         if qc_user_id in sales_team_ids:
                             nsu_text = "found match, NSU member onboarded by sales team"
@@ -400,9 +401,37 @@ try:
                     except: pass
 
             # ------------------------------------------------
-            # PHASE 4: COMBINE & WRITE
+            # PHASE 4: E-COMMERCE CHECK (NEW)
             # ------------------------------------------------
-            final_rca = f"{nsu_text} - {monthly_text}{guardrail_text}"
+            ecom_text = ""
+            if has_member_sales:
+                try:
+                    # Check for ZECM channel
+                    sales_query = f"""
+                        SELECT 
+                            Current_Month + Month_Minus_1 + Month_Minus_2 + 
+                            Month_Minus_3 + Month_Minus_4 + Month_Minus_5 + Month_Minus_6 AS Total_Sales
+                        FROM member_sales
+                        WHERE CAST(MEMBERSHIP_NBR AS VARCHAR) = '{mem_id_str}'
+                          AND CHANNEL_TYPE = 'ZECM'
+                    """
+                    # We sum the sales to verify activity
+                    sales_res = con.execute(sales_query).fetchone()
+                    
+                    if sales_res:
+                        total_sales = sales_res[0] if sales_res[0] else 0
+                        # If row exists, they are ZECM. If sales > 0, it's confirmed active.
+                        # The requirement just said "any sale", so total > 0 covers it.
+                        if total_sales > 0:
+                            ecom_text = " - Ecom member need approval from Ecom team"
+                            
+                except Exception as e:
+                    print(f"Error checking Member Sales: {e}")
+
+            # ------------------------------------------------
+            # PHASE 5: COMBINE & WRITE
+            # ------------------------------------------------
+            final_rca = f"{nsu_text} - {monthly_text}{guardrail_text}{ecom_text}"
 
             final_rows_to_write.append([
                 REQUEST_ID,
