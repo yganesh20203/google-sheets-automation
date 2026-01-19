@@ -39,7 +39,6 @@ NSU_CONFIG = {
 # 2. HELPER FUNCTIONS
 # ==========================================
 def get_file_date(filename):
-    """Parses '_Jan_26' to datetime for sorting."""
     try:
         match = re.search(r'_([A-Za-z]{3})_(\d{2,4})', filename)
         if match:
@@ -61,7 +60,6 @@ def download_file(file_id, output_path):
         return False
 
 def get_sales_team_ids():
-    """Fetches valid IDs from specific columns in the 3 Google Sheet tabs."""
     valid_ids = set()
     print(">>> Fetching Sales Team Data from Google Sheets...")
     try:
@@ -90,7 +88,6 @@ def get_sales_team_ids():
         return set()
 
 def write_values_to_sheet(values):
-    """Writes consolidated rows to Analysis_Results"""
     try:
         if not SPREADSHEET_ID or not values: return
         print(f"Writing {len(values)} rows to Sheet...")
@@ -136,7 +133,6 @@ if download_file(INPUT_FILE_ID, 'user_input.json'):
         df_input = pd.DataFrame(raw)
         df_input.columns = [x.strip().lower() for x in df_input.columns]
         
-        # SMART FIX: Swap Name/ID
         if 'mem_nbr' in df_input.columns and 'mem_name' in df_input.columns:
             def fix_id(row):
                 val_id = str(row['mem_nbr']).strip()
@@ -173,7 +169,6 @@ except: files = []
 if files:
     print(f"Found {len(files)} CSV files. Loading...")
     
-    # 1. SPECIAL FILES
     for item in files:
         safe_name = item['name'].replace(" ", "_")
         if "4RExtraction" in safe_name: 
@@ -197,7 +192,6 @@ if files:
                 try: con.execute(f"CREATE OR REPLACE TABLE save_easy AS SELECT * FROM read_csv_auto('{safe_name}', union_by_name=true)"); has_save_easy = True
                 except: pass
 
-    # 2. MONTHLY FILES
     for item in files:
         safe_name = item['name'].replace(" ", "_")
         if any(x in safe_name for x in ["Store_Guardrail", "SaveEasy", "Pan_india", "4RExtraction", "Memberwise_sales"]): continue
@@ -238,7 +232,7 @@ try:
             mem_id_str = str(mem_id)
             user_matches = matches_df[matches_df['User_ID'] == mem_id_str]
             
-            # --- DETAILS ---
+            # --- INPUT DETAILS ---
             input_details = con.execute(f"SELECT store_nbr, mem_name, sub_cat_name FROM user_data WHERE CAST(mem_nbr AS VARCHAR) = '{mem_id_str}'").fetchone()
             input_store = str(input_details[0] if input_details else "").replace('.0', '').strip()
             input_name = input_details[1] if input_details else ""
@@ -257,137 +251,175 @@ try:
             final_store = input_store if input_store else matched_store
             final_name = input_name if input_name else matched_name
 
-            # ==========================================================
-            # PRIORITY 1: CURRENT MONTH
-            # ==========================================================
-            current_month_status = None
+            # --- 1. GATHER ALL FLAGS (The "Facts") ---
+            
+            # A. Current Month Status & BU Logic
+            flag_in_current_beat = False
+            current_month_store_nbr = ""
+            file_sub_cat = ""
+            
             if current_month_file:
                 current_match = user_matches[user_matches['Found_In_File'] == current_month_file]
                 if not current_match.empty:
-                    file_sub_cat = ""
+                    flag_in_current_beat = True
                     current_row = current_match.iloc[0]
+                    # Get Store NBR from file for Actionable message
+                    for col in ['store_nbr', 'Store_NBR', 'Store']:
+                        if col in current_match.columns:
+                            val = current_row.get(col)
+                            if val: current_month_store_nbr = str(val).replace('.0','').strip(); break
+                    
+                    # Get Sub Cat
                     for col in ['Sub Cat Name', 'Sub_Cat_Name', 'Sub Category', 'Sub_Category', 'sub_cat_name']:
                         if col in current_match.columns:
                             val = current_row.get(col)
                             if val: file_sub_cat = str(val).strip().lower(); break
-                    
-                    if file_sub_cat and input_sub_cat:
-                        if file_sub_cat == input_sub_cat: current_month_status = "Member already present in beat"
-                        else: current_month_status = f"Member already in different BU ({file_sub_cat})"
-                    elif not input_sub_cat:
-                        current_month_status = "Member already present in beat (No Input Sub-Cat)"
 
-            # ==========================================================
-            # PRIORITY 2: RCA CASCADE
-            # ==========================================================
-            final_rca = ""
-            final_status = "COMPLETED"
+            # B. NSU Status
+            flag_is_nsu = False
+            flag_nsu_sales_team = False # True = Sales, False = Store
+            if has_4r_extraction:
+                try:
+                    qc_query = f"SELECT \"QC User ID\" FROM extraction_4r WHERE CAST(\"Membership Nbr\" AS VARCHAR) = '{mem_id_str}' LIMIT 1"
+                    try: qc_res = con.execute(qc_query).fetchone()
+                    except: qc_res = con.execute(f"SELECT QC_User_ID FROM extraction_4r WHERE CAST(Membership_Nbr AS VARCHAR) = '{mem_id_str}' LIMIT 1").fetchone()
 
-            if current_month_status:
-                final_rca = current_month_status
-                final_status = "MATCH FOUND"
-            else:
-                # 1. NSU Check
-                nsu_text = ""
-                if has_4r_extraction:
-                    try:
-                        qc_query = f"SELECT \"QC User ID\" FROM extraction_4r WHERE CAST(\"Membership Nbr\" AS VARCHAR) = '{mem_id_str}' LIMIT 1"
-                        try: qc_res = con.execute(qc_query).fetchone()
-                        except: qc_res = con.execute(f"SELECT QC_User_ID FROM extraction_4r WHERE CAST(Membership_Nbr AS VARCHAR) = '{mem_id_str}' LIMIT 1").fetchone()
+                    if qc_res:
+                        flag_is_nsu = True
+                        if str(qc_res[0]).strip() in sales_team_ids: 
+                            flag_nsu_sales_team = True
+                except: pass
 
-                        if qc_res:
-                            if str(qc_res[0]).strip() in sales_team_ids: nsu_text = "found match, NSU member onboarded by sales team"
-                            else: nsu_text = "NSU member not onboarded by sales team"
-                        else: nsu_text = "not NSU member"
-                    except: nsu_text = "Error checking NSU status"
-                else: nsu_text = "4RExtraction.csv not found"
+            # C. SaveEasy
+            flag_save_easy = False
+            if has_save_easy:
+                try:
+                    if con.execute(f"SELECT COUNT(*) FROM save_easy WHERE CAST(MembershipNBR AS VARCHAR) = '{mem_id_str}'").fetchone()[0] > 0:
+                        flag_save_easy = True
+                except: pass
 
-                # 2. Monthly History
-                found_files = []
-                if not user_matches.empty: found_files = user_matches['Found_In_File'].unique().tolist()
-                found_count = len(found_files)
-                total_files = len(all_master_files)
-                monthly_text = ""
-                found_loc = "N/A"
-                if found_count > 0: final_status = "MATCH FOUND"
-
-                if found_count == 0: monthly_text = "Member not found in any monthly file."
-                elif found_count == total_files:
-                    monthly_text = "Found in all monthly files."
-                    found_loc = "All Monthly Files"
-                else:
-                    missing_files = list(set(all_master_files) - set(found_files))
-                    missing_files.sort(key=get_file_date)
-                    latest_missing = missing_files[-1]
-                    monthly_text = f"Member not found in {latest_missing}"
-                    found_loc = "Multiple Files"
-
-                # 3. Guardrails
-                guardrail_text = ""
-                
-                # A. SaveEasy
-                if has_save_easy:
-                    try:
-                        if con.execute(f"SELECT COUNT(*) FROM save_easy WHERE CAST(MembershipNBR AS VARCHAR) = '{mem_id_str}'").fetchone()[0] > 0:
-                            guardrail_text += " - SaveEasy Member"
-                    except: pass
-                
-                # B. Store Guardrail & ZBDA Check
-                is_store_guardrailed = False
-                if has_store_guardrail and final_store and mem_id_str:
-                    try:
-                        if con.execute(f"SELECT COUNT(*) FROM store_guardrail WHERE TRIM(CAST(Code AS VARCHAR)) = '{final_store}{mem_id_str}'").fetchone()[0] > 0:
-                            guardrail_text += " - Member in Store Guardrail list"
-                            is_store_guardrailed = True
-                    except: pass
-                
-                # C. Pan India
-                if has_pan_india:
-                    try:
-                        if con.execute(f"SELECT COUNT(*) FROM guardrail_pan_india WHERE CAST(\"Membership no.\" AS VARCHAR) = '{mem_id_str}'").fetchone()[0] > 0:
-                            guardrail_text += " - member in Guardrail_Pan_india_list"
-                    except: 
-                        try:
-                             if con.execute(f"SELECT COUNT(*) FROM guardrail_pan_india WHERE CAST(Membership_no_ AS VARCHAR) = '{mem_id_str}'").fetchone()[0] > 0:
-                                guardrail_text += " - member in Guardrail_Pan_india_list"
-                        except: pass
-
-                # 4. Member Sales Checks (Ecom & ZBDA)
-                if has_member_sales:
-                    # Ecom Check
-                    try:
-                        sales_res = con.execute(f"SELECT SUM(Current_Month + Month_Minus_1 + Month_Minus_2 + Month_Minus_3 + Month_Minus_4 + Month_Minus_5 + Month_Minus_6) FROM member_sales WHERE CAST(MEMBERSHIP_NBR AS VARCHAR) = '{mem_id_str}' AND CHANNEL_TYPE = 'ZECM'").fetchone()
-                        if sales_res and sales_res[0] and sales_res[0] > 0:
-                            guardrail_text += " - Ecom member need approval from Ecom team"
-                    except: pass
-
-                    # NEW: ZBDA Zero-Sales Check (If Guardrailed)
-                    if is_store_guardrailed:
-                        try:
-                            # Fetch Store and Sales Sum
+            # D. Store Guardrail & ZBDA
+            flag_store_guard = False
+            zbda_sales_val = 0
+            zbda_store_val = ""
+            
+            if has_store_guardrail and final_store and mem_id_str:
+                try:
+                    if con.execute(f"SELECT COUNT(*) FROM store_guardrail WHERE TRIM(CAST(Code AS VARCHAR)) = '{final_store}{mem_id_str}'").fetchone()[0] > 0:
+                        flag_store_guard = True
+                        
+                        # Check ZBDA Sales only if guardrailed
+                        if has_member_sales:
                             zbda_query = f"""
-                                SELECT 
-                                    CAST(STORE_NUMBER AS VARCHAR),
-                                    (Current_Month + Month_Minus_1 + Month_Minus_2 + Month_Minus_3 + Month_Minus_4 + Month_Minus_5 + Month_Minus_6)
-                                FROM member_sales
-                                WHERE CAST(MEMBERSHIP_NBR AS VARCHAR) = '{mem_id_str}'
-                                  AND CHANNEL_TYPE = 'ZBDA'
-                                LIMIT 1
+                                SELECT CAST(STORE_NUMBER AS VARCHAR), (Current_Month + Month_Minus_1 + Month_Minus_2 + Month_Minus_3 + Month_Minus_4 + Month_Minus_5 + Month_Minus_6)
+                                FROM member_sales WHERE CAST(MEMBERSHIP_NBR AS VARCHAR) = '{mem_id_str}' AND CHANNEL_TYPE = 'ZBDA' LIMIT 1
                             """
                             zbda_res = con.execute(zbda_query).fetchone()
-                            
                             if zbda_res:
-                                sales_store = str(zbda_res[0]).replace('.0', '').strip()
-                                total_sales = zbda_res[1] if zbda_res[1] is not None else 0
-                                
-                                if total_sales == 0:
-                                    guardrail_text += f" - get store manager approval from {sales_store}"
-                        except Exception as e: print(f"ZBDA Check Error: {e}")
+                                zbda_store_val = str(zbda_res[0]).replace('.0', '').strip()
+                                zbda_sales_val = zbda_res[1] if zbda_res[1] is not None else 0
+                except: pass
 
-                final_rca = f"{nsu_text} - {monthly_text}{guardrail_text}"
+            # E. Pan India
+            flag_pan_india = False
+            if has_pan_india:
+                try:
+                    if con.execute(f"SELECT COUNT(*) FROM guardrail_pan_india WHERE CAST(\"Membership no.\" AS VARCHAR) = '{mem_id_str}'").fetchone()[0] > 0:
+                        flag_pan_india = True
+                except:
+                    try: 
+                        if con.execute(f"SELECT COUNT(*) FROM guardrail_pan_india WHERE CAST(Membership_no_ AS VARCHAR) = '{mem_id_str}'").fetchone()[0] > 0:
+                            flag_pan_india = True
+                    except: pass
+
+            # F. E-Commerce (ZECM)
+            flag_zecm_active = False
+            if has_member_sales:
+                try:
+                    sales_res = con.execute(f"SELECT SUM(Current_Month + Month_Minus_1 + Month_Minus_2 + Month_Minus_3 + Month_Minus_4 + Month_Minus_5 + Month_Minus_6) FROM member_sales WHERE CAST(MEMBERSHIP_NBR AS VARCHAR) = '{mem_id_str}' AND CHANNEL_TYPE = 'ZECM'").fetchone()
+                    if sales_res and sales_res[0] and sales_res[0] > 0:
+                        flag_zecm_active = True
+                except: pass
+
+            # G. History (Last Active)
+            latest_missing_month = "N/A"
+            found_files = []
+            if not user_matches.empty: found_files = user_matches['Found_In_File'].unique().tolist()
+            if len(found_files) > 0 and len(all_master_files) > len(found_files):
+                missing_files = list(set(all_master_files) - set(found_files))
+                missing_files.sort(key=get_file_date)
+                latest_missing_month = missing_files[-1]
+
+            # ==========================================================
+            # 2. DECISION TREE (THE FINAL RCA LOGIC)
+            # ==========================================================
+            
+            final_display_rca = ""
+            final_status = "COMPLETED"
+
+            # 1. SaveEasy Check (Highest Priority REJECT)
+            if flag_save_easy:
+                final_display_rca = "REJECT: SaveEasy active member cannot be added to the Beat"
+                final_status = "MATCH FOUND (SaveEasy)"
+
+            # 2. Current Beat Plan Check
+            elif flag_in_current_beat:
+                # Sub Cat Match Logic
+                if input_sub_cat and file_sub_cat:
+                    if input_sub_cat == file_sub_cat:
+                        final_display_rca = "REJECT: Member already in Beat"
+                    else:
+                        # Mismatch Logic
+                        prof_keywords = ['o&i corp', 'horeca', 'kam']
+                        groc_keywords = ['grocery common + gm kirana', 'gm common', 'grocery-kam']
+                        
+                        if file_sub_cat in prof_keywords:
+                            final_display_rca = "ACTION: Member is present under professional BU get Insti. team approval to add into beat"
+                        elif file_sub_cat in groc_keywords:
+                            target_store = current_month_store_nbr if current_month_store_nbr else final_store
+                            final_display_rca = f"ACTION: Member is present under grocery BU get store manager approval from {target_store} approval to add into beat"
+                        else:
+                            final_display_rca = f"REJECT: Member in different BU ({file_sub_cat})"
+                else:
+                    final_display_rca = "REJECT: Member already in Beat"
+                
+                final_status = "MATCH FOUND"
+
+            # 3. Store Guardrail Check
+            elif flag_store_guard:
+                if zbda_sales_val > 0:
+                    final_display_rca = "REJECT: Member already in Store gradrail list cannot be added in beat"
+                else:
+                    # Sales = 0
+                    target_store = zbda_store_val if zbda_store_val else final_store
+                    final_display_rca = f"ACTION: Member in Store gradrail list get permission by {target_store} store manager"
+                final_status = "MATCH FOUND (Guardrail)"
+
+            # 4. Pan India Check
+            elif flag_pan_india:
+                final_display_rca = "ACTION: Member already in Pan bharat file get market manager approval to add in beat"
+                final_status = "MATCH FOUND (Pan India)"
+
+            # 5. E-Commerce Check (Not NSU, Not SaveEasy, ZECM > 0)
+            elif flag_zecm_active:
+                final_display_rca = "ACTION: Ecom member get approval from Ecom team"
+
+            # 6. NSU Logic
+            elif flag_is_nsu:
+                if flag_nsu_sales_team:
+                    final_display_rca = "PROCEED: NSU member will be added to the beat"
+                else:
+                    final_display_rca = "ACTION: NSU member onboarded by store team get store manger approval to add in beat"
+
+            # 7. Clean Case (Re-activation / New)
+            else:
+                if latest_missing_month != "N/A":
+                    final_display_rca = f"PROCEED: Member will be added in beat (Last excluded: {latest_missing_month})"
+                else:
+                    final_display_rca = "PROCEED: Member will be added in beat"
 
             # --- WRITE ROW ---
-            found_location_val = "Current Beat" if current_month_status else (found_loc if 'found_loc' in locals() else "N/A")
+            found_location_val = "Current Beat" if flag_in_current_beat else ("Historical Files" if len(found_files)>0 else "N/A")
             
             final_rows_to_write.append([
                 REQUEST_ID,
@@ -396,7 +428,7 @@ try:
                 mem_id_str,
                 final_name,
                 final_status,
-                final_rca
+                final_display_rca
             ])
     else:
         final_rows_to_write.append([REQUEST_ID, "N/A", "", "", "", "ERROR", "No Master Files Found"])
