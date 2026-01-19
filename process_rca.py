@@ -251,7 +251,7 @@ try:
             final_store = input_store if input_store else matched_store
             final_name = input_name if input_name else matched_name
 
-            # --- 1. GATHER ALL FLAGS (The "Facts") ---
+            # --- 1. GATHER ALL FLAGS ---
             
             # A. Current Month Status & BU Logic
             flag_in_current_beat = False
@@ -263,13 +263,11 @@ try:
                 if not current_match.empty:
                     flag_in_current_beat = True
                     current_row = current_match.iloc[0]
-                    # Get Store NBR from file for Actionable message
                     for col in ['store_nbr', 'Store_NBR', 'Store']:
                         if col in current_match.columns:
                             val = current_row.get(col)
                             if val: current_month_store_nbr = str(val).replace('.0','').strip(); break
                     
-                    # Get Sub Cat
                     for col in ['Sub Cat Name', 'Sub_Cat_Name', 'Sub Category', 'Sub_Category', 'sub_cat_name']:
                         if col in current_match.columns:
                             val = current_row.get(col)
@@ -277,7 +275,7 @@ try:
 
             # B. NSU Status
             flag_is_nsu = False
-            flag_nsu_sales_team = False # True = Sales, False = Store
+            flag_nsu_sales_team = False 
             if has_4r_extraction:
                 try:
                     qc_query = f"SELECT \"QC User ID\" FROM extraction_4r WHERE CAST(\"Membership Nbr\" AS VARCHAR) = '{mem_id_str}' LIMIT 1"
@@ -307,8 +305,6 @@ try:
                 try:
                     if con.execute(f"SELECT COUNT(*) FROM store_guardrail WHERE TRIM(CAST(Code AS VARCHAR)) = '{final_store}{mem_id_str}'").fetchone()[0] > 0:
                         flag_store_guard = True
-                        
-                        # Check ZBDA Sales only if guardrailed
                         if has_member_sales:
                             zbda_query = f"""
                                 SELECT CAST(STORE_NUMBER AS VARCHAR), (Current_Month + Month_Minus_1 + Month_Minus_2 + Month_Minus_3 + Month_Minus_4 + Month_Minus_5 + Month_Minus_6)
@@ -364,12 +360,10 @@ try:
 
             # 2. Current Beat Plan Check
             elif flag_in_current_beat:
-                # Sub Cat Match Logic
                 if input_sub_cat and file_sub_cat:
                     if input_sub_cat == file_sub_cat:
                         final_display_rca = "REJECT: Member already in Beat"
                     else:
-                        # Mismatch Logic
                         prof_keywords = ['o&i corp', 'horeca', 'kam']
                         groc_keywords = ['grocery common + gm kirana', 'gm common', 'grocery-kam']
                         
@@ -382,7 +376,6 @@ try:
                             final_display_rca = f"REJECT: Member in different BU ({file_sub_cat})"
                 else:
                     final_display_rca = "REJECT: Member already in Beat"
-                
                 final_status = "MATCH FOUND"
 
             # 3. Store Guardrail Check
@@ -390,7 +383,6 @@ try:
                 if zbda_sales_val > 0:
                     final_display_rca = "REJECT: Member already in Store gradrail list cannot be added in beat"
                 else:
-                    # Sales = 0
                     target_store = zbda_store_val if zbda_store_val else final_store
                     final_display_rca = f"ACTION: Member in Store gradrail list get permission by {target_store} store manager"
                 final_status = "MATCH FOUND (Guardrail)"
@@ -400,7 +392,7 @@ try:
                 final_display_rca = "ACTION: Member already in Pan bharat file get market manager approval to add in beat"
                 final_status = "MATCH FOUND (Pan India)"
 
-            # 5. E-Commerce Check (Not NSU, Not SaveEasy, ZECM > 0)
+            # 5. E-Commerce Check
             elif flag_zecm_active:
                 final_display_rca = "ACTION: Ecom member get approval from Ecom team"
 
@@ -411,12 +403,15 @@ try:
                 else:
                     final_display_rca = "ACTION: NSU member onboarded by store team get store manger approval to add in beat"
 
-            # 7. Clean Case (Re-activation / New)
+            # 7. Clean Case (Re-activation / New / Unknown)
             else:
                 if latest_missing_month != "N/A":
+                    # Was in historical files, but not current -> Re-add
                     final_display_rca = f"PROCEED: Member will be added in beat (Last excluded: {latest_missing_month})"
                 else:
-                    final_display_rca = "PROCEED: Member will be added in beat"
+                    # Not in ANY database (Truly unknown) -> REJECT as per new requirement
+                    final_display_rca = "REJECT: Given member not found please check the member nbr and reenter it"
+                    final_status = "ERROR"
 
             # --- WRITE ROW ---
             found_location_val = "Current Beat" if flag_in_current_beat else ("Historical Files" if len(found_files)>0 else "N/A")
