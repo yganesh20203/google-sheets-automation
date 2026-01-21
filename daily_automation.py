@@ -146,11 +146,16 @@ def upload_excel_report(drive_service, excel_buffer, file_name, folder_id):
         log(f"  ❌ Failed to upload report: {e}")
 
 def update_xlsm_data_sheet(drive_service, df_to_paste, file_name_to_find, sheet_name_to_update, folder_id):
-    """Updates the raw data sheet in the macro-enabled .xlsm file."""
+    """
+    Updates the raw data sheet in the macro-enabled .xlsm file.
+    CRITICAL UPDATE: Sets the data sheet to 'veryHidden' so users cannot see data
+    unless they log in via the VBA Macro.
+    """
     log(f"\n--- Updating Raw Data in Excel: {file_name_to_find} ---")
     if df_to_paste is None: return
 
     try:
+        # 1. Download the existing XLSM file
         query = f"'{folder_id}' in parents and name='{file_name_to_find}' and trashed=false"
         results = drive_service.files().list(q=query, fields="files(id, name)", supportsAllDrives=True, includeItemsFromAllDrives=True).execute()
         items = results.get('files', [])
@@ -166,17 +171,38 @@ def update_xlsm_data_sheet(drive_service, df_to_paste, file_name_to_find, sheet_
         while not done: _, done = downloader.next_chunk()
         buffer.seek(0)
         
+        # 2. Load Workbook with Macros preserved
         wb = openpyxl.load_workbook(buffer, keep_vba=True)
+        
+        # 3. ENSURE 'WELCOME' SHEET EXISTS (Critical for Security)
+        # Excel crashes if all sheets are hidden. We need one visible dummy sheet.
+        if 'Welcome' not in wb.sheetnames:
+            ws_welcome = wb.create_sheet('Welcome', 0) # Create at index 0
+            ws_welcome['A1'] = "Please Enable Macros to Login and View Data."
+            ws_welcome.sheet_state = 'visible'
+        else:
+            # Ensure it is visible if it already exists
+            wb['Welcome'].sheet_state = 'visible'
+
+        # 4. Update the Data Sheet
         if sheet_name_to_update in wb.sheetnames:
+            # Remove old data sheet
             idx = wb.sheetnames.index(sheet_name_to_update)
             wb.remove(wb[sheet_name_to_update])
+            # Create new sheet at same index
             ws = wb.create_sheet(sheet_name_to_update, index=idx)
         else:
             ws = wb.create_sheet(sheet_name_to_update)
             
+        # Write Data
         for r in dataframe_to_rows(df_to_paste, index=False, header=True):
             ws.append(r)
             
+        # 5. LOCK THE DATA SHEET (The Security Fix)
+        # 'veryHidden' means user cannot right-click > Unhide in Excel. Only VBA can unhide it.
+        ws.sheet_state = 'veryHidden' 
+            
+        # 6. Save and Upload
         out_buffer = BytesIO()
         wb.save(out_buffer)
         out_buffer.seek(0)
@@ -184,7 +210,7 @@ def update_xlsm_data_sheet(drive_service, df_to_paste, file_name_to_find, sheet_
         
         media = MediaIoBaseUpload(out_buffer, mimetype='application/vnd.ms-excel.sheet.macroEnabled.12', resumable=True)
         drive_service.files().update(fileId=file_id, media_body=media, supportsAllDrives=True).execute()
-        log("  ✅ XLSM updated successfully.")
+        log("  ✅ XLSM updated and LOCKED successfully.")
 
     except Exception as e:
         log(f"  [ERROR] Updating XLSM failed: {e}")
