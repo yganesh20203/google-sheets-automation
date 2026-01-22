@@ -9,7 +9,7 @@ import pandas as pd
 import numpy as np
 import openpyxl 
 from openpyxl.utils.dataframe import dataframe_to_rows 
-import xlsxwriter  # CRITICAL: Engine for creating Excel Graphs & Dashboards
+import xlsxwriter 
 
 # Google API Libraries
 from google.oauth2 import service_account
@@ -111,9 +111,10 @@ def load_file_to_df(drive_service, file_id, file_name):
 
         if csv_bytes:
             try:
-                return pd.read_csv(BytesIO(csv_bytes))
+                # Read everything as string initially to prevent auto-conversion errors
+                return pd.read_csv(BytesIO(csv_bytes), low_memory=False)
             except UnicodeDecodeError:
-                return pd.read_csv(BytesIO(csv_bytes), encoding='latin1')
+                return pd.read_csv(BytesIO(csv_bytes), encoding='latin1', low_memory=False)
         return None
 
     except Exception as e:
@@ -148,7 +149,7 @@ def upload_excel_report(drive_service, excel_buffer, file_name, folder_id):
 def update_xlsm_data_sheet(drive_service, df_to_paste, file_name_to_find, sheet_name_to_update, folder_id):
     """
     Updates the raw data sheet in the macro-enabled .xlsm file.
-    CRITICAL UPDATE: Sets the data sheet to 'veryHidden' so users cannot see data
+    CRITICAL SECURITY: Sets the data sheet to 'veryHidden' so users cannot see data
     unless they log in via the VBA Macro.
     """
     log(f"\n--- Updating Raw Data in Excel: {file_name_to_find} ---")
@@ -175,7 +176,6 @@ def update_xlsm_data_sheet(drive_service, df_to_paste, file_name_to_find, sheet_
         wb = openpyxl.load_workbook(buffer, keep_vba=True)
         
         # 3. ENSURE 'WELCOME' SHEET EXISTS (Critical for Security)
-        # Excel crashes if all sheets are hidden. We need one visible dummy sheet.
         if 'Welcome' not in wb.sheetnames:
             ws_welcome = wb.create_sheet('Welcome', 0) # Create at index 0
             ws_welcome['A1'] = "Please Enable Macros to Login and View Data."
@@ -186,10 +186,8 @@ def update_xlsm_data_sheet(drive_service, df_to_paste, file_name_to_find, sheet_
 
         # 4. Update the Data Sheet
         if sheet_name_to_update in wb.sheetnames:
-            # Remove old data sheet
             idx = wb.sheetnames.index(sheet_name_to_update)
             wb.remove(wb[sheet_name_to_update])
-            # Create new sheet at same index
             ws = wb.create_sheet(sheet_name_to_update, index=idx)
         else:
             ws = wb.create_sheet(sheet_name_to_update)
@@ -198,8 +196,7 @@ def update_xlsm_data_sheet(drive_service, df_to_paste, file_name_to_find, sheet_
         for r in dataframe_to_rows(df_to_paste, index=False, header=True):
             ws.append(r)
             
-        # 5. LOCK THE DATA SHEET (The Security Fix)
-        # 'veryHidden' means user cannot right-click > Unhide in Excel. Only VBA can unhide it.
+        # 5. LOCK THE DATA SHEET (veryHidden)
         ws.sheet_state = 'veryHidden' 
             
         # 6. Save and Upload
@@ -246,10 +243,7 @@ def process_overall_instock(df):
         return None
 
 def process_lmtd_logic(df_lmtd, calc_date):
-    """
-    1. Calculates LMTD Sales (Partial month: 1st to Yesterday)
-    2. Calculates LM Sales (Full month: Sum of entire December)
-    """
+    """Calculates LMTD & LM Sales."""
     if df_lmtd is None: return None
     log("    > Calculating LMTD & LM Sales from December data...")
     try:
@@ -258,10 +252,8 @@ def process_lmtd_logic(df_lmtd, calc_date):
             s_item = pd.to_numeric(df_lmtd['ITEM_NUMBER'], errors='coerce').fillna(0).astype('int64').astype(str)
             df_lmtd['LMTD_Key'] = s_store + s_item
         else:
-            log("    [ERROR] STORE_NBR or ITEM_NUMBER missing in Dec Sales file.")
             return None
 
-        # --- 1. LMTD (Partial Month) ---
         day_limit = calc_date.day 
         cols_lmtd = []
         for d in range(1, day_limit + 1):
@@ -274,8 +266,6 @@ def process_lmtd_logic(df_lmtd, calc_date):
         else:
             df_lmtd['LMTD Sales'] = df_lmtd[cols_lmtd].apply(pd.to_numeric, errors='coerce').sum(axis=1)
 
-        # --- 2. LM Sales (Full Month) ---
-        # Select ALL columns that start with 'Sales_December_'
         cols_lm = [c for c in df_lmtd.columns if c.startswith('Sales_December_')]
         if not cols_lm:
             df_lmtd['LM Sales'] = 0
@@ -289,23 +279,17 @@ def process_lmtd_logic(df_lmtd, calc_date):
         return None
 
 def process_lytd_logic(df_lytd, calc_date):
-    """
-    1. Calculates LYTD Sales (Partial month: 1st to Yesterday in Jan 2025)
-    2. Calculates LYM Sales (Full month: Sum of entire Jan 2025)
-    """
+    """Calculates LYTD & LYM Sales."""
     if df_lytd is None: return None
     log("    > Calculating LYTD & LYM Sales from Jan 2025 data...")
     try:
-        # 1. Create Key
         if 'STORE_NBR' in df_lytd.columns and 'ITEM_NUMBER' in df_lytd.columns:
             s_store = pd.to_numeric(df_lytd['STORE_NBR'], errors='coerce').fillna(0).astype('int64').astype(str)
             s_item = pd.to_numeric(df_lytd['ITEM_NUMBER'], errors='coerce').fillna(0).astype('int64').astype(str)
             df_lytd['LYTD_Key'] = s_store + s_item
         else:
-            log("    [ERROR] STORE_NBR or ITEM_NUMBER missing in Jan 2025 Sales file.")
             return None
 
-        # --- 1. LYTD (Partial Month) ---
         day_limit = calc_date.day 
         cols_lytd = []
         for d in range(1, day_limit + 1):
@@ -318,8 +302,6 @@ def process_lytd_logic(df_lytd, calc_date):
         else:
             df_lytd['LYTD Sales'] = df_lytd[cols_lytd].apply(pd.to_numeric, errors='coerce').sum(axis=1)
 
-        # --- 2. LYM Sales (Full Month) ---
-        # Select ALL columns that start with 'Sales_Jan_'
         cols_lym = [c for c in df_lytd.columns if c.startswith('Sales_Jan_')]
         if not cols_lym:
             df_lytd['LYM Sales'] = 0
@@ -338,16 +320,19 @@ def process_article_sales_report(df, df_hirarchy, df_div, df_instock, df_gst, df
     if df is None: return None
     
     try:
-        # 1. Generate Article UID (Store + Article No)
+        # 1. Generate Article UID
         if 'Article No' in df.columns and 'Store No' in df.columns:
             s_store = pd.to_numeric(df['Store No'], errors='coerce').fillna(0).astype('int64').astype(str)
             s_article = pd.to_numeric(df['Article No'], errors='coerce').fillna(0).astype('int64').astype(str)
             df.insert(df.columns.get_loc('Article No')+1, 'Article UID', s_store + s_article)
 
-        # 2. Merge Hierarchy
+        # 2. Merge Hierarchy (UPDATED FIX FOR STORE NO / LOCATION MISMATCH)
         if df_hirarchy is not None and 'Store No' in df.columns:
-            df['Store No'] = df['Store No'].astype(str)
-            df_hirarchy['Location'] = df_hirarchy['Location'].astype(str)
+            # Convert both to string, strip spaces, and remove trailing '.0' (regex)
+            # This ensures "1001", "1001.0", and 1001 all become "1001"
+            df['Store No'] = df['Store No'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+            df_hirarchy['Location'] = df_hirarchy['Location'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+            
             df = df.merge(df_hirarchy[['Location', 'Market', 'Market Manager']], left_on='Store No', right_on='Location', how='left')
             df.rename(columns={'Market': 'Region'}, inplace=True)
             df.drop(columns=['Location'], inplace=True, errors='ignore')
@@ -381,21 +366,21 @@ def process_article_sales_report(df, df_hirarchy, df_div, df_instock, df_gst, df
             ytd_cols = [c for c in ['Article UID', '2021 YTD Sales', '2022 YTD Sales', '2023 YTD Sales', '2024 YTD Sales', '2025 YTD Sales'] if c in df_ytd.columns]
             df = df.merge(df_ytd[ytd_cols], on='Article UID', how='left')
 
-        # 7. Merge LMTD Sales AND LM Sales
+        # 7. Merge LMTD
         if df_lmtd is not None and 'Article UID' in df.columns:
              df = df.merge(df_lmtd, left_on='Article UID', right_on='LMTD_Key', how='left')
              df['LMTD Sales'] = df['LMTD Sales'].fillna(0)
-             df['LM Sales'] = df['LM Sales'].fillna(0) # Fill NaN for new column
+             df['LM Sales'] = df['LM Sales'].fillna(0)
              df.drop(columns=['LMTD_Key'], inplace=True, errors='ignore')
 
-        # 8. Merge LYTD Sales AND LYM Sales
+        # 8. Merge LYTD
         if df_lytd is not None and 'Article UID' in df.columns:
              df = df.merge(df_lytd, left_on='Article UID', right_on='LYTD_Key', how='left')
              df['LYTD Sales'] = df['LYTD Sales'].fillna(0)
-             df['LYM Sales'] = df['LYM Sales'].fillna(0) # Fill NaN for new column
+             df['LYM Sales'] = df['LYM Sales'].fillna(0)
              df.drop(columns=['LYTD_Key'], inplace=True, errors='ignore')
 
-        # 9. Calculate Average Sales & Day On Hand
+        # 9. Calculate Metrics
         day_of_year = calc_date.timetuple().tm_yday
         if day_of_year > 0:
             sales_cols = ['YTD Sale Amt', '2021 YTD Sales', '2022 YTD Sales', '2023 YTD Sales', '2024 YTD Sales', '2025 YTD Sales']
@@ -414,7 +399,7 @@ def process_article_sales_report(df, df_hirarchy, df_div, df_instock, df_gst, df
                 choices = ['Price Support Required', 'Stock Required']
                 df['Final Remarks'] = np.select(conditions, choices, default='')
 
-        # 10. Clean up columns & Filters
+        # 10. Clean up
         cols_drop = ['WEEK4_COST', 'WEEK4_QTY', 'WEEEK4_Sales', 'WEEK4_Sales']
         df.drop(columns=[c for c in cols_drop if c in df.columns], inplace=True)
 
@@ -425,7 +410,7 @@ def process_article_sales_report(df, df_hirarchy, df_div, df_instock, df_gst, df
         if 'Store' in df.columns: 
             df = df[df['Store'].astype(str).str.strip().str.lower() != 'lucknow fc']
 
-        # 11. REORDER COLUMNS - Added LM Sales and LYM Sales here
+        # 11. REORDER COLUMNS
         desired_order = [
             "Article No", "Article UID", "Store No", "Store", "Region", "Market Manager",
             "Article Description", "Brand Name", "Article Type", "PB_FLAG", "Base Unit of Measurement",
@@ -459,15 +444,11 @@ def process_article_sales_report(df, df_hirarchy, df_div, df_instock, df_gst, df
 # ==============================================================================
 
 def generate_excel_insights_report(df, date_str):
-    """
-    Generates a sophisticated Excel report with Charts, Store-Level Pareto Analysis,
-    and Drill-Downs using XlsxWriter.
-    """
+    """Generates Excel Dashboard."""
     log("    > Spinning up Intelligence Engine (Excel Generation)...")
     
     output = BytesIO()
     
-    # Force Numeric for Calculations - ADDED NEW COLS HERE
     numeric_cols = [
         'YTD Sale Amt', 'FTD Sale Amt', 'On Hand Cost', 'YTD Avg Sales', 
         'Day On Hand', 'MTD Sale Amt', 'LMTD Sales', 'LYTD Sales',
@@ -476,20 +457,16 @@ def generate_excel_insights_report(df, date_str):
     for col in numeric_cols:
         if col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-    # --- FIX APPLIED HERE: Added options to handle NaN/Inf gracefully ---
     with pd.ExcelWriter(output, engine='xlsxwriter', engine_kwargs={'options': {'nan_inf_to_errors': True}}) as writer:
         workbook = writer.book
         
-        # Styles
         fmt_header = workbook.add_format({'bold': True, 'bg_color': '#2F75B5', 'font_color': 'white', 'border': 1})
         fmt_subhead = workbook.add_format({'bold': True, 'bg_color': '#DDEBF7', 'border': 1})
         fmt_currency = workbook.add_format({'num_format': '₹ #,##0.00'})
         fmt_number = workbook.add_format({'num_format': '#,##0'})
         fmt_pct = workbook.add_format({'num_format': '0.0%'})
         
-        # ----------------------------------------------------
         # SHEET 1: DASHBOARD
-        # ----------------------------------------------------
         ws_dash = workbook.add_worksheet('Dashboard')
         
         total_ftd = df['FTD Sale Amt'].sum() if 'FTD Sale Amt' in df.columns else 0
@@ -531,9 +508,7 @@ def generate_excel_insights_report(df, date_str):
             chart_col.set_title({'name': 'Top 10 Stores (Today\'s Sales)'})
             ws_dash.insert_chart('E5', chart_col)
 
-        # ----------------------------------------------------
         # SHEET 2: STORE-LEVEL PARETO
-        # ----------------------------------------------------
         ws_pareto = workbook.add_worksheet('Pareto_Analysis')
         
         if 'Store' in df.columns and 'FTD Sale Amt' in df.columns and 'Article Description' in df.columns:
@@ -589,9 +564,7 @@ def generate_excel_insights_report(df, date_str):
                 full_pareto_df = pd.concat(pareto_details_list)
                 full_pareto_df.to_excel(writer, sheet_name='Pareto_Analysis', startrow=detail_start_row+1, index=False)
 
-        # ----------------------------------------------------
         # SHEET 3: REGIONAL DEEP DIVE
-        # ----------------------------------------------------
         if 'Region' in df.columns and 'Store' in df.columns:
             ws_region = workbook.add_worksheet('Regional_Deep_Dive')
             row_cursor = 0
@@ -620,9 +593,7 @@ def generate_excel_insights_report(df, date_str):
                 
                 row_cursor += 2
 
-        # ----------------------------------------------------
         # SHEET 4: ACTIONABLES
-        # ----------------------------------------------------
         ws_action = workbook.add_worksheet('Actionables')
         
         ws_action.write('A1', 'URGENT REORDER (Top 50 Fast Movers)', fmt_header)
@@ -655,9 +626,7 @@ def generate_excel_insights_report(df, date_str):
                 for c, val in enumerate(row):
                     ws_action.write(r+2, c+12, val)
 
-        # ----------------------------------------------------
         # SHEET 5: CORRELATIONS
-        # ----------------------------------------------------
         ws_corr = workbook.add_worksheet('Correlations')
         
         ws_corr.write('A1', 'TOP VENDORS CAUSING STOCKOUTS', fmt_header)
@@ -678,8 +647,6 @@ def generate_excel_insights_report(df, date_str):
                 gst_items['Est_Pre_Vol'] = gst_items['2024 Avg Sales'] / gst_items['Selling Price (With Tax)'].replace(0, 1)
                 gst_items['Est_Post_Vol'] = gst_items['MTD Qty'] / 30
                 gst_items['Vol Change %'] = ((gst_items['Est_Post_Vol'] - gst_items['Est_Pre_Vol']) / gst_items['Est_Pre_Vol'].replace(0, 1))
-                
-                # Fill NANs here to be safe, although engine option handles it too
                 gst_items['Vol Change %'] = gst_items['Vol Change %'].fillna(0)
                 
                 view = gst_items[['Article Description', 'Selling Price (With Tax)', 'Vol Change %']].head(50)
@@ -721,7 +688,6 @@ def check_and_copy_files(drive_service):
     df_gst = download_csv_to_df(drive_service, 'gst_change_list.csv', TARGET_FOLDER_ID)
     df_ytd = download_csv_to_df(drive_service, 'ytd_sales.csv', TARGET_FOLDER_ID)
     
-    # Download LMTD & LYTD Source Data
     df_lmtd_raw = download_csv_to_df(drive_service, '2025_dec_sales.csv', TARGET_FOLDER_ID)
     df_lytd_raw = download_csv_to_df(drive_service, '2025_jan_sales.csv', TARGET_FOLDER_ID)
 
@@ -750,12 +716,10 @@ def check_and_copy_files(drive_service):
     df_article = load_file_to_df(drive_service, file_info['ArticleSalesReport'][0], file_info['ArticleSalesReport'][1])
     df_instock = load_file_to_df(drive_service, file_info['Overall_Instock'][0], file_info['Overall_Instock'][1])
     
-    # Process Helpers
     df_instock = process_overall_instock(df_instock)
     df_lmtd_clean = process_lmtd_logic(df_lmtd_raw, calc_date)
     df_lytd_clean = process_lytd_logic(df_lytd_raw, calc_date)
     
-    # Process Main Article Report
     df_final = process_article_sales_report(
         df_article, df_hirarchy, df_div, df_instock, df_gst, df_ytd, 
         df_lmtd_clean, df_lytd_clean, calc_date
@@ -765,7 +729,7 @@ def check_and_copy_files(drive_service):
     if df_final is not None:
         log("\n--- Phase 4: Output Generation ---")
         
-        # A. Update Raw Data XLSM
+        # A. Update Raw Data XLSM (SECURE VERSION)
         update_xlsm_data_sheet(
             drive_service, df_final, 
             "article_sales_report.xlsm", "Sheet1", TARGET_FOLDER_ID
