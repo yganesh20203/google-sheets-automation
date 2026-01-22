@@ -326,16 +326,32 @@ def process_article_sales_report(df, df_hirarchy, df_div, df_instock, df_gst, df
             s_article = pd.to_numeric(df['Article No'], errors='coerce').fillna(0).astype('int64').astype(str)
             df.insert(df.columns.get_loc('Article No')+1, 'Article UID', s_store + s_article)
 
-        # 2. Merge Hierarchy (UPDATED FIX FOR STORE NO / LOCATION MISMATCH)
+        # ======================================================================
+        # 2. Merge Hierarchy (ROBUST FIX FOR TEXT vs NUMBER MISMATCH)
+        # ======================================================================
         if df_hirarchy is not None and 'Store No' in df.columns:
-            # Convert both to string, strip spaces, and remove trailing '.0' (regex)
-            # This ensures "1001", "1001.0", and 1001 all become "1001"
-            df['Store No'] = df['Store No'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
-            df_hirarchy['Location'] = df_hirarchy['Location'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+            # A. Clean Main Data Store No: Force Float -> Int -> String
+            # This handles "1001" and "1001.0" and 1001 by forcing them all to "1001"
+            df['Store_Key'] = pd.to_numeric(df['Store No'], errors='coerce').fillna(0).astype('int64').astype(str)
             
-            df = df.merge(df_hirarchy[['Location', 'Market', 'Market Manager']], left_on='Store No', right_on='Location', how='left')
-            df.rename(columns={'Market': 'Region'}, inplace=True)
-            df.drop(columns=['Location'], inplace=True, errors='ignore')
+            # B. Clean Hierarchy Location: Force Float -> Int -> String
+            # NOTE: We assume 'Location' is the store number in the hierarchy file
+            df_hirarchy['Location_Key'] = pd.to_numeric(df_hirarchy['Location'], errors='coerce').fillna(0).astype('int64').astype(str)
+            
+            # C. Check if 'Market' or 'Region' exists
+            # Sometimes CSV headers vary. We check for both.
+            hier_cols = ['Location_Key', 'Market Manager']
+            if 'Region' in df_hirarchy.columns:
+                hier_cols.append('Region')
+            elif 'Market' in df_hirarchy.columns:
+                df_hirarchy.rename(columns={'Market': 'Region'}, inplace=True)
+                hier_cols.append('Region')
+            
+            # D. Merge using the clean keys
+            df = df.merge(df_hirarchy[hier_cols], left_on='Store_Key', right_on='Location_Key', how='left')
+            
+            # E. Drop temporary keys
+            df.drop(columns=['Location_Key', 'Store_Key'], inplace=True, errors='ignore')
 
         # 3. Merge Division V1
         if df_div is not None and 'Sub Division' in df.columns:
