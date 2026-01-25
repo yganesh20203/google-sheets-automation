@@ -327,19 +327,12 @@ def process_article_sales_report(df, df_hirarchy, df_div, df_instock, df_gst, df
             df.insert(df.columns.get_loc('Article No')+1, 'Article UID', s_store + s_article)
 
         # ======================================================================
-        # 2. Merge Hierarchy (ROBUST FIX FOR TEXT vs NUMBER MISMATCH)
+        # 2. Merge Hierarchy
         # ======================================================================
         if df_hirarchy is not None and 'Store No' in df.columns:
-            # A. Clean Main Data Store No: Force Float -> Int -> String
-            # This handles "1001" and "1001.0" and 1001 by forcing them all to "1001"
             df['Store_Key'] = pd.to_numeric(df['Store No'], errors='coerce').fillna(0).astype('int64').astype(str)
-            
-            # B. Clean Hierarchy Location: Force Float -> Int -> String
-            # NOTE: We assume 'Location' is the store number in the hierarchy file
             df_hirarchy['Location_Key'] = pd.to_numeric(df_hirarchy['Location'], errors='coerce').fillna(0).astype('int64').astype(str)
             
-            # C. Check if 'Market' or 'Region' exists
-            # Sometimes CSV headers vary. We check for both.
             hier_cols = ['Location_Key', 'Market Manager']
             if 'Region' in df_hirarchy.columns:
                 hier_cols.append('Region')
@@ -347,10 +340,7 @@ def process_article_sales_report(df, df_hirarchy, df_div, df_instock, df_gst, df
                 df_hirarchy.rename(columns={'Market': 'Region'}, inplace=True)
                 hier_cols.append('Region')
             
-            # D. Merge using the clean keys
             df = df.merge(df_hirarchy[hier_cols], left_on='Store_Key', right_on='Location_Key', how='left')
-            
-            # E. Drop temporary keys
             df.drop(columns=['Location_Key', 'Store_Key'], inplace=True, errors='ignore')
 
         # 3. Merge Division V1
@@ -378,7 +368,6 @@ def process_article_sales_report(df, df_hirarchy, df_div, df_instock, df_gst, df
         if df_ytd is not None and 'Article UID' in df.columns:
             df['Article UID'] = df['Article UID'].astype(str).str.replace(r'\.0$', '', regex=True)
             df_ytd['Article UID'] = pd.to_numeric(df_ytd['Article UID'], errors='coerce').fillna(-1).astype('int64').astype(str)
-            
             ytd_cols = [c for c in ['Article UID', '2021 YTD Sales', '2022 YTD Sales', '2023 YTD Sales', '2024 YTD Sales', '2025 YTD Sales'] if c in df_ytd.columns]
             df = df.merge(df_ytd[ytd_cols], on='Article UID', how='left')
 
@@ -469,7 +458,8 @@ def generate_excel_insights_report(df, date_str):
     numeric_cols = [
         'YTD Sale Amt', 'FTD Sale Amt', 'On Hand Cost', 'YTD Avg Sales', 
         'Day On Hand', 'MTD Sale Amt', 'LMTD Sales', 'LYTD Sales',
-        'LM Sales', 'LYM Sales', 'On Hand Qty', 'Selling Price (With Tax)'
+        'LM Sales', 'LYM Sales', 'On Hand Qty', 'Selling Price (With Tax)',
+        'On Order Qty'
     ]
     for col in numeric_cols:
         if col in df.columns: 
@@ -588,7 +578,7 @@ def generate_excel_insights_report(df, date_str):
                 full_pareto_df.to_excel(writer, sheet_name='Pareto_Analysis', startrow=detail_start_row+1, index=False)
 
         # ======================================================================
-        # SHEET 3: REGIONAL DEEP DIVE (MODIFIED - Grouped + MTD Sales/Stock)
+        # SHEET 3: REGIONAL DEEP DIVE (MODIFIED)
         # ======================================================================
         if 'Store' in df.columns:
             ws_region = workbook.add_worksheet('Regional_Deep_Dive')
@@ -603,15 +593,12 @@ def generate_excel_insights_report(df, date_str):
             }
 
             for group_name, store_list in store_groups.items():
-                # Filter Main DF for stores in this group
                 group_df = df[df['Store'].astype(str).str.strip().isin(store_list)].copy()
                 if group_df.empty: continue
 
-                # WRITE GROUP HEADER
                 ws_region.merge_range(row_cursor, 0, row_cursor, len(store_list), f"--- {group_name} ---", fmt_header)
                 row_cursor += 1
 
-                # MTD Sales & Stock Logic
                 if 'MTD Sale Amt' in group_df.columns:
                     top_arts = group_df.groupby('Article Description')['MTD Sale Amt'].sum().nlargest(10).index.tolist()
                     subset = group_df[group_df['Article Description'].isin(top_arts)]
@@ -619,7 +606,6 @@ def generate_excel_insights_report(df, date_str):
                     pivot_sales = subset.pivot_table(index='Article Description', columns='Store', values='MTD Sale Amt', aggfunc='sum').fillna(0)
                     pivot_stock = subset.pivot_table(index='Article Description', columns='Store', values='On Hand Qty', aggfunc='sum').fillna(0)
                     
-                    # Ensure column order matches group list
                     cols_present = [s for s in store_list if s in pivot_sales.columns]
                     pivot_sales = pivot_sales[cols_present]
                     pivot_stock = pivot_stock[cols_present]
@@ -628,7 +614,6 @@ def generate_excel_insights_report(df, date_str):
                     ws_region.write(row_cursor, 0, "Top 10 Articles (By MTD Sales)", fmt_subhead)
                     for c, col in enumerate(cols_present): ws_region.write(row_cursor, c+1, col, fmt_subhead)
                     row_cursor += 1
-                    
                     for art in top_arts:
                         if art in pivot_sales.index:
                             ws_region.write(row_cursor, 0, art)
@@ -636,13 +621,12 @@ def generate_excel_insights_report(df, date_str):
                                 ws_region.write(row_cursor, c+1, val, fmt_currency)
                             row_cursor += 1
                     
-                    row_cursor += 1 # Spacer
+                    row_cursor += 1 
 
                     # Table 2: On Hand Qty
                     ws_region.write(row_cursor, 0, "Stock Status (On Hand Qty)", fmt_subhead)
                     for c, col in enumerate(cols_present): ws_region.write(row_cursor, c+1, col, fmt_subhead)
                     row_cursor += 1
-                    
                     for art in top_arts:
                         if art in pivot_stock.index:
                             ws_region.write(row_cursor, 0, art)
@@ -687,109 +671,125 @@ def generate_excel_insights_report(df, date_str):
                     ws_action.write(r+2, c+12, val)
 
         # ======================================================================
-        # SHEET 5: CORRELATIONS
-        # ======================================================================
-        ws_corr = workbook.add_worksheet('Correlations')
-        
-        ws_corr.write('A1', 'TOP VENDORS CAUSING STOCKOUTS', fmt_header)
-        if 'Vendor Name' in df.columns:
-            vendor_risk = df[df['Final Remarks'] == 'Stock Required'].groupby('Vendor Name')['Article UID'].count().reset_index(name='Stockout Count')
-            vendor_risk = vendor_risk.sort_values('Stockout Count', ascending=False).head(20)
-            
-            ws_corr.write(1, 0, 'Vendor Name')
-            ws_corr.write(1, 1, 'Stockout Count')
-            for r, row in enumerate(vendor_risk.values):
-                ws_corr.write(r+2, 0, row[0])
-                ws_corr.write(r+2, 1, row[1])
-
-        ws_corr.write('E1', 'GST PRICE IMPACT (Elasticity Proxy)', fmt_header)
-        if 'GST_Change' in df.columns and '2024 Avg Sales' in df.columns and 'MTD Qty' in df.columns:
-            gst_items = df[df['GST_Change'] == 'Yes'].copy()
-            if not gst_items.empty and 'Selling Price (With Tax)' in df.columns:
-                gst_items['Est_Pre_Vol'] = gst_items['2024 Avg Sales'] / gst_items['Selling Price (With Tax)'].replace(0, 1)
-                gst_items['Est_Post_Vol'] = gst_items['MTD Qty'] / 30
-                gst_items['Vol Change %'] = ((gst_items['Est_Post_Vol'] - gst_items['Est_Pre_Vol']) / gst_items['Est_Pre_Vol'].replace(0, 1))
-                gst_items['Vol Change %'] = gst_items['Vol Change %'].fillna(0)
-                
-                view = gst_items[['Article Description', 'Selling Price (With Tax)', 'Vol Change %']].head(50)
-                
-                cols_gst = ['Article Description', 'Price', 'Vol Change %']
-                for c, col in enumerate(cols_gst): ws_corr.write(1, c+4, col)
-                for r, row in enumerate(view.values):
-                    ws_corr.write(r+2, 4, row[0])
-                    ws_corr.write(r+2, 5, row[1])
-                    ws_corr.write(r+2, 6, row[2], fmt_pct)
-
-        # ======================================================================
-        # SHEET 6: OPPORTUNITY ANALYSIS (NEW - High LMTD vs Low MTD + High Stock)
+        # SHEET 5: OPPORTUNITY ANALYSIS
         # ======================================================================
         ws_opp = workbook.add_worksheet('Opp_HighLMTD_LowMTD')
         
         req_cols = ['Store', 'Article Description', 'LMTD Sales', 'MTD Sale Amt', 'On Hand Qty', 'LYM Sales', 'Selling Price (With Tax)']
         if all(c in df.columns for c in req_cols):
             
-            # 1. Calculate the Drop (Dip)
             df['Sales_Drop_Value'] = df['LMTD Sales'] - df['MTD Sale Amt']
-            
-            # 2. Filter: Drop > 0 (Sales declined) AND Stock > 100
             mask = (df['Sales_Drop_Value'] > 0) & (df['On Hand Qty'] > 100)
             opp_df = df[mask].copy()
-            
-            # 3. Sort by Store (Asc) and Drop Value (Desc)
             opp_df = opp_df.sort_values(by=['Store', 'Sales_Drop_Value'], ascending=[True, False])
-            
-            # 4. Get Top 10 per Store
             top_opps = opp_df.groupby('Store').head(10)
             
-            # 5. Define Output Columns
-            out_cols = [
-                'Store', 'Article Description', 
-                'LMTD Sales', 'MTD Sale Amt', 'Sales_Drop_Value', 
-                'On Hand Qty', 'LYM Sales', 'Selling Price (With Tax)'
-            ]
+            out_cols = ['Store', 'Article Description', 'LMTD Sales', 'MTD Sale Amt', 'Sales_Drop_Value', 'On Hand Qty', 'LYM Sales', 'Selling Price (With Tax)']
             
-            # 6. Write to Excel
             ws_opp.write('A1', "Opportunity Analysis: High LMTD vs Low MTD (Stock > 100)", fmt_header)
-            ws_opp.write('A2', "Top 10 articles per store where sales dropped significantly despite high stock.", workbook.add_format({'italic': True}))
-            
-            # Write Headers
-            for c, col in enumerate(out_cols):
-                ws_opp.write(3, c, col, fmt_subhead)
-                
-            # Write Rows
+            for c, col in enumerate(out_cols): ws_opp.write(3, c, col, fmt_subhead)
             for r, row in enumerate(top_opps[out_cols].values):
                 row_num = r + 4
-                ws_opp.write(row_num, 0, row[0]) # Store
-                ws_opp.write(row_num, 1, row[1]) # Desc
-                ws_opp.write(row_num, 2, row[2], fmt_currency) # LMTD
-                ws_opp.write(row_num, 3, row[3], fmt_currency) # MTD
-                ws_opp.write(row_num, 4, row[4], fmt_currency) # Drop Value
-                ws_opp.write(row_num, 5, row[5], fmt_number)   # On Hand Qty
-                ws_opp.write(row_num, 6, row[6], fmt_currency) # LYM
-                ws_opp.write(row_num, 7, row[7], fmt_currency) # Price
+                ws_opp.write(row_num, 0, row[0])
+                ws_opp.write(row_num, 1, row[1])
+                ws_opp.write(row_num, 2, row[2], fmt_currency)
+                ws_opp.write(row_num, 3, row[3], fmt_currency)
+                ws_opp.write(row_num, 4, row[4], fmt_currency)
+                ws_opp.write(row_num, 5, row[5], fmt_number)
+                ws_opp.write(row_num, 6, row[6], fmt_currency)
+                ws_opp.write(row_num, 7, row[7], fmt_currency)
             
-            # 7. ADD PLOTS (Conditional Formatting / Data Bars)
             if not top_opps.empty:
                 last_row = len(top_opps) + 4
-                
-                # Plot 1: Red Data Bar for Sales Drop (Column E / Index 4)
-                ws_opp.conditional_format(4, 4, last_row, 4, {
-                    'type': 'data_bar', 
-                    'bar_color': '#FF6347', # Tomato Red
-                    'bar_solid': True
-                })
-                
-                # Plot 2: Blue/Green Data Bar for On Hand Qty (Column F / Index 5)
-                ws_opp.conditional_format(4, 5, last_row, 5, {
-                    'type': 'data_bar', 
-                    'bar_color': '#63C384', # Green
-                    'bar_solid': True
-                })
+                ws_opp.conditional_format(4, 4, last_row, 4, {'type': 'data_bar', 'bar_color': '#FF6347', 'bar_solid': True})
+                ws_opp.conditional_format(4, 5, last_row, 5, {'type': 'data_bar', 'bar_color': '#63C384', 'bar_solid': True})
             
-            # Set Column Widths for readability
-            ws_opp.set_column(0, 0, 15) # Store
-            ws_opp.set_column(1, 1, 40) # Desc
-            ws_opp.set_column(2, 7, 12) # Metrics
+            ws_opp.set_column(0, 1, 30)
+
+        # ======================================================================
+        # SHEET 6: SNIPER VIEW (IMPACTFUL ALERTS)
+        # ======================================================================
+        ws_sniper = workbook.add_worksheet('Sniper_View')
+        
+        # 1. INBOUND DISASTER CHECK (High On Order, Low Sales)
+        ws_sniper.write('A1', '🚨 INBOUND DISASTERS (Cancel These POs)', fmt_header)
+        if 'On Order Qty' in df.columns and 'MTD Sale Amt' in df.columns:
+            risky_po = df[(df['On Order Qty'] > 200) & (df['MTD Sale Amt'] < 1000)].sort_values('On Order Qty', ascending=False).head(30)
+            cols_po = ['Store', 'Article Description', 'On Order Qty', 'MTD Sale Amt']
+            for c, col in enumerate(cols_po): ws_sniper.write(1, c, col, fmt_subhead)
+            for r, row in enumerate(risky_po[cols_po].values):
+                ws_sniper.write(r+2, 0, row[0])
+                ws_sniper.write(r+2, 1, row[1])
+                ws_sniper.write(r+2, 2, row[2], fmt_number)
+                ws_sniper.write(r+2, 3, row[3], fmt_currency)
+
+        # 2. ZOMBIE INVENTORY (Old GRN, Unsold)
+        ws_sniper.write('F1', '🧟 ZOMBIE STOCK (>180 Days Old)', fmt_header)
+        if 'Last GRN Date' in df.columns and 'On Hand Qty' in df.columns:
+            df['GRN_DT'] = pd.to_datetime(df['Last GRN Date'], errors='coerce')
+            six_months_ago = pd.Timestamp.now() - pd.Timedelta(days=180)
+            zombies = df[(df['GRN_DT'] < six_months_ago) & (df['On Hand Qty'] > 10)].copy()
+            if not zombies.empty:
+                zombies = zombies.sort_values('On Hand Cost', ascending=False).head(30)
+                cols_zom = ['Store', 'Article Description', 'Last GRN Date', 'On Hand Qty', 'On Hand Cost']
+                for c, col in enumerate(cols_zom): ws_sniper.write(1, c+5, col, fmt_subhead)
+                for r, row in enumerate(zombies[cols_zom].values):
+                    for c, val in enumerate(row):
+                        ws_sniper.write(r+2, c+5, val)
+
+        # 3. KVI STOCKOUTS (Critical)
+        ws_sniper.write('L1', '⭐ KVI STOCKOUTS (Must Fill)', fmt_header)
+        if 'KVI_Flag' in df.columns and 'On Hand Qty' in df.columns:
+            kvi_out = df[(df['KVI_Flag'].notna()) & (df['On Hand Qty'] < 5)].head(30)
+            cols_kvi = ['Store', 'Article Description', 'On Hand Qty']
+            for c, col in enumerate(cols_kvi): ws_sniper.write(1, c+11, col, fmt_subhead)
+            for r, row in enumerate(kvi_out[cols_kvi].values):
+                for c, val in enumerate(row):
+                    ws_sniper.write(r+2, c+11, val)
+        
+        ws_sniper.set_column(0, 15, 15)
+
+        # ======================================================================
+        # SHEET 7: VENDOR STORE SCORECARD (NEW!)
+        # ======================================================================
+        ws_vendor = workbook.add_worksheet('Vendor_Store_Scorecard')
+        ws_vendor.write('A1', 'VENDOR PERFORMANCE SCORECARD (Top 15 per Store)', fmt_header)
+
+        if 'Vendor Name' in df.columns and 'Store' in df.columns:
+            # 1. Aggregate metrics by Store + Vendor
+            v_agg = df.groupby(['Store', 'Vendor Name']).agg({
+                'YTD Sale Amt': 'sum',
+                'On Hand Cost': 'sum',
+                'On Order Qty': 'sum'
+            }).reset_index()
+
+            # 2. Filter out vendors with negligible impact (e.g. 0 Sales AND 0 Inventory)
+            v_agg = v_agg[(v_agg['YTD Sale Amt'] > 0) | (v_agg['On Hand Cost'] > 0)]
+
+            # 3. Calculate Stock Turn (Sales / Inventory)
+            # Avoid division by zero
+            v_agg['Stock Turn'] = np.where(v_agg['On Hand Cost'] > 0, v_agg['YTD Sale Amt'] / v_agg['On Hand Cost'], 0)
+
+            # 4. Sort: Priority is SALES performance.
+            v_agg = v_agg.sort_values(by=['Store', 'YTD Sale Amt'], ascending=[True, False])
+
+            # 5. Take Top 15 vendors per Store
+            top_vendors = v_agg.groupby('Store').head(15)
+
+            # 6. Write to Excel
+            v_cols = ['Store', 'Vendor Name', 'YTD Sale Amt', 'On Hand Cost', 'On Order Qty', 'Stock Turn']
+            for c, col in enumerate(v_cols): ws_vendor.write(1, c, col, fmt_subhead)
+
+            for r, row in enumerate(top_vendors[v_cols].values):
+                ws_vendor.write(r+2, 0, row[0]) # Store
+                ws_vendor.write(r+2, 1, row[1]) # Vendor
+                ws_vendor.write(r+2, 2, row[2], fmt_currency) # Sales
+                ws_vendor.write(r+2, 3, row[3], fmt_currency) # Inv Cost
+                ws_vendor.write(r+2, 4, row[4], fmt_number)   # On Order
+                ws_vendor.write(r+2, 5, row[5], workbook.add_format({'num_format': '0.00'})) # Stock Turn
+
+            ws_vendor.set_column(0, 1, 25) # Widen columns
+            ws_vendor.set_column(2, 5, 12)
 
     output.seek(0)
     return output
