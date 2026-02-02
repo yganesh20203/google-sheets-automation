@@ -243,21 +243,30 @@ def process_overall_instock(df):
         return None
 
 def process_lmtd_logic(df_lmtd, calc_date):
-    """Calculates LMTD & LM Sales."""
+    """
+    Calculates LMTD & LM Sales.
+    FILE: 2026_jan_sales.csv
+    HEADERS: Sales_Jan_01, Sales_Jan_02...
+    """
     if df_lmtd is None: return None
-    log("    > Calculating LMTD & LM Sales from December data...")
+    log("    > Calculating LMTD & LM Sales from Jan 2026 data...")
     try:
+        # Ensure Key Columns Exist
         if 'STORE_NBR' in df_lmtd.columns and 'ITEM_NUMBER' in df_lmtd.columns:
             s_store = pd.to_numeric(df_lmtd['STORE_NBR'], errors='coerce').fillna(0).astype('int64').astype(str)
             s_item = pd.to_numeric(df_lmtd['ITEM_NUMBER'], errors='coerce').fillna(0).astype('int64').astype(str)
             df_lmtd['LMTD_Key'] = s_store + s_item
         else:
+            log("    [ERROR] STORE_NBR or ITEM_NUMBER missing in LMTD file.")
             return None
 
+        # --- FIX: CHANGED 'December' TO 'Jan' ---
         day_limit = calc_date.day 
         cols_lmtd = []
+        
+        # 1. Calculate LMTD (1st to Current Day of Jan)
         for d in range(1, day_limit + 1):
-            col_name = f"Sales_December_{d:02d}"
+            col_name = f"Sales_Jan_{d:02d}"  # <--- UPDATED TO MATCH YOUR FILE
             if col_name in df_lmtd.columns:
                 cols_lmtd.append(col_name)
         
@@ -266,7 +275,8 @@ def process_lmtd_logic(df_lmtd, calc_date):
         else:
             df_lmtd['LMTD Sales'] = df_lmtd[cols_lmtd].apply(pd.to_numeric, errors='coerce').sum(axis=1)
 
-        cols_lm = [c for c in df_lmtd.columns if c.startswith('Sales_December_')]
+        # 2. Calculate LM Sales (Total Jan Sales)
+        cols_lm = [c for c in df_lmtd.columns if c.startswith('Sales_Jan_')] # <--- UPDATED
         if not cols_lm:
             df_lmtd['LM Sales'] = 0
         else:
@@ -279,21 +289,32 @@ def process_lmtd_logic(df_lmtd, calc_date):
         return None
 
 def process_lytd_logic(df_lytd, calc_date):
-    """Calculates LYTD & LYM Sales."""
+    """
+    Calculates LYTD & LYM Sales.
+    FILE: 2025_feb_sales.csv
+    HEADERS: Sales_Feb_01, Sales_Feb_02...
+    """
     if df_lytd is None: return None
-    log("    > Calculating LYTD & LYM Sales from Jan 2025 data...")
+    log("    > Calculating LYTD & LYM Sales from Feb 2025 data...")
     try:
+        # Note: Assuming 2025_feb_sales.csv ALSO has STORE_NBR and ITEM_NUMBER
+        # If the headers you pasted were partial, ensure these keys exist.
         if 'STORE_NBR' in df_lytd.columns and 'ITEM_NUMBER' in df_lytd.columns:
             s_store = pd.to_numeric(df_lytd['STORE_NBR'], errors='coerce').fillna(0).astype('int64').astype(str)
             s_item = pd.to_numeric(df_lytd['ITEM_NUMBER'], errors='coerce').fillna(0).astype('int64').astype(str)
             df_lytd['LYTD_Key'] = s_store + s_item
         else:
+            # Fallback if headers are different in the LYTD file, check assuming same standard
+            log("    [ERROR] STORE_NBR or ITEM_NUMBER missing in LYTD file.")
             return None
 
+        # --- FIX: CHANGED 'Jan' TO 'Feb' ---
         day_limit = calc_date.day 
         cols_lytd = []
+        
+        # 1. Calculate LYTD (1st to Current Day of Feb 2025)
         for d in range(1, day_limit + 1):
-            col_name = f"Sales_Jan_{d:02d}" 
+            col_name = f"Sales_Feb_{d:02d}" # <--- UPDATED TO MATCH YOUR FILE
             if col_name in df_lytd.columns:
                 cols_lytd.append(col_name)
         
@@ -302,7 +323,8 @@ def process_lytd_logic(df_lytd, calc_date):
         else:
             df_lytd['LYTD Sales'] = df_lytd[cols_lytd].apply(pd.to_numeric, errors='coerce').sum(axis=1)
 
-        cols_lym = [c for c in df_lytd.columns if c.startswith('Sales_Jan_')]
+        # 2. Calculate LYM Sales (Total Feb 2025 Sales)
+        cols_lym = [c for c in df_lytd.columns if c.startswith('Sales_Feb_')] # <--- UPDATED
         if not cols_lym:
             df_lytd['LYM Sales'] = 0
         else:
@@ -313,6 +335,7 @@ def process_lytd_logic(df_lytd, calc_date):
     except Exception as e:
         log(f"    [ERROR] LYTD Calculation failed: {e}")
         return None
+
 
 def process_article_sales_report(df, df_hirarchy, df_div, df_instock, df_gst, df_ytd, df_lmtd, df_lytd, calc_date):
     """The Master Transformation Function."""
