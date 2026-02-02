@@ -821,8 +821,8 @@ def check_and_copy_files(drive_service):
     df_gst = download_csv_to_df(drive_service, 'gst_change_list.csv', TARGET_FOLDER_ID)
     df_ytd = download_csv_to_df(drive_service, 'ytd_sales.csv', TARGET_FOLDER_ID)
     
-    df_lmtd_raw = download_csv_to_df(drive_service, '2025_dec_sales.csv', TARGET_FOLDER_ID)
-    df_lytd_raw = download_csv_to_df(drive_service, '2025_jan_sales.csv', TARGET_FOLDER_ID)
+    df_lmtd_raw = download_csv_to_df(drive_service, '2026_jan_sales.csv', TARGET_FOLDER_ID)
+    df_lytd_raw = download_csv_to_df(drive_service, '2025_feb_sales.csv', TARGET_FOLDER_ID)
 
     # 2. Date Fallback Logic
     log("\n--- Phase 2: Locating Source Files ---")
