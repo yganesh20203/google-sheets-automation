@@ -42,12 +42,30 @@ NSU_CONFIG = {
 # ==========================================
 # 2. HELPER FUNCTIONS
 # ==========================================
+def normalize_store_id(val):
+    """Safely converts 4729.0, '4729', or 4729 to string '4729'."""
+    if not val: return ""
+    return str(val).replace('.0', '').strip()
+
+def get_col_value(row, possible_names):
+    """Case-insensitive search for a column value."""
+    # Convert row keys to lower case for comparison
+    row_lower = {k.lower(): v for k, v in row.items()}
+    for name in possible_names:
+        if name.lower() in row_lower:
+            return row_lower[name.lower()]
+    return None
+
 def get_file_date(filename):
-    """Parses '_Jan_26' to datetime for sorting."""
+    """Parses '_Jan_26' or 'Jan 26' to datetime for sorting."""
     try:
-        match = re.search(r'_([A-Za-z]{3})_(\d{2,4})', filename)
+        # Match Month (3 chars) and Year (2 or 4 digits)
+        match = re.search(r'([A-Za-z]{3})[ _-]?(\d{2,4})', filename)
         if match:
-            return datetime.strptime(f"{match.group(1)} {match.group(2)}", "%b %y")
+            date_str = f"{match.group(1)} {match.group(2)}"
+            # Handle 2 digit year vs 4 digit year
+            fmt = "%b %y" if len(match.group(2)) == 2 else "%b %Y"
+            return datetime.strptime(date_str, fmt)
     except: pass
     return datetime.min
 
@@ -248,22 +266,25 @@ try:
         
         # --- 1. GATHER INPUT DETAILS ---
         input_details = con.execute(f"SELECT store_nbr, mem_name, sub_cat_name FROM user_data WHERE CAST(mem_nbr AS VARCHAR) = '{mem_id_str}'").fetchone()
-        input_store = str(input_details[0] if input_details else "").replace('.0', '').strip()
+        
+        input_store_clean = normalize_store_id(input_details[0]) if input_details else ""
         input_name = input_details[1] if input_details else ""
         input_sub_cat = str(input_details[2] if input_details and input_details[2] else "").strip().lower()
 
-        matched_store = ""
+        matched_store_clean = ""
         matched_name = ""
-        if not user_matches.empty:
-            first = user_matches.iloc[0]
-            matched_name = first.get('User_Name', '') or first.get('mem_name', '')
-            for col in ['store_nbr', 'Store_NBR', 'Store']:
-                if col in user_matches.columns:
-                    val = first.get(col)
-                    if val and str(val).lower() != 'nan': matched_store = str(val).replace('.0', '').strip(); break
         
-        final_store = input_store if input_store else matched_store
-        final_name = input_name if input_name else matched_name
+        if not user_matches.empty:
+            # We convert row to dict to safely look for columns
+            first_row = user_matches.iloc[0].to_dict()
+            matched_name = first_row.get('User_Name', '') or first_row.get('mem_name', '')
+            
+            # Find Store in matches
+            raw_matched_store = get_col_value(first_row, ['store_nbr', 'Store_NBR', 'Store', 'Store NBR'])
+            matched_store_clean = normalize_store_id(raw_matched_store)
+        
+        final_store_display = input_store_clean if input_store_clean else matched_store_clean
+        final_name_display = input_name if input_name else matched_name
 
         # --- 2. FETCH SALES DATA FOR EMAIL ---
         sales_info_str = "No Data"
@@ -283,32 +304,32 @@ try:
 
         # --- 3. SET FLAGS (FACT GATHERING) ---
         flag_in_current_beat = False
-        current_month_store_nbr = ""
-        file_sub_cat = ""
+        current_beat_store_clean = ""
+        current_beat_sub_cat = ""
         
         # A. Current Beat Check
         if current_month_file and not user_matches.empty:
             current_match = user_matches[user_matches['Found_In_File'] == current_month_file]
             if not current_match.empty:
                 flag_in_current_beat = True
-                current_row = current_match.iloc[0]
-                for col in ['store_nbr', 'Store_NBR', 'Store']:
-                    if col in current_match.columns:
-                        val = current_row.get(col)
-                        if val: current_month_store_nbr = str(val).replace('.0','').strip(); break
+                curr_row = current_match.iloc[0].to_dict()
                 
-                for col in ['Sub Cat Name', 'Sub_Cat_Name', 'Sub Category', 'Sub_Category', 'sub_cat_name']:
-                    if col in current_match.columns:
-                        val = current_row.get(col)
-                        if val: file_sub_cat = str(val).strip().lower(); break
+                # Get Store from File
+                raw_store = get_col_value(curr_row, ['store_nbr', 'Store_NBR', 'Store', 'Store NBR'])
+                current_beat_store_clean = normalize_store_id(raw_store)
+                
+                # Get Sub Cat from File
+                raw_cat = get_col_value(curr_row, ['Sub Cat Name', 'Sub_Cat_Name', 'Sub Category', 'Sub_Category', 'sub_cat_name'])
+                if raw_cat: current_beat_sub_cat = str(raw_cat).strip().lower()
 
         # B. NSU Check
         flag_is_nsu = False; flag_nsu_sales_team = False 
         if has_4r_extraction:
             try:
-                qc_query = f"SELECT \"QC User ID\" FROM extraction_4r WHERE CAST(\"Membership Nbr\" AS VARCHAR) = '{mem_id_str}' LIMIT 1"
-                try: qc_res = con.execute(qc_query).fetchone()
-                except: qc_res = con.execute(f"SELECT QC_User_ID FROM extraction_4r WHERE CAST(Membership_Nbr AS VARCHAR) = '{mem_id_str}' LIMIT 1").fetchone()
+                qc_res = con.execute(f"SELECT QC_User_ID FROM extraction_4r WHERE CAST(Membership_Nbr AS VARCHAR) = '{mem_id_str}' LIMIT 1").fetchone()
+                # Try quote version if first fails
+                if not qc_res: qc_res = con.execute(f"SELECT \"QC User ID\" FROM extraction_4r WHERE CAST(\"Membership Nbr\" AS VARCHAR) = '{mem_id_str}' LIMIT 1").fetchone()
+                
                 if qc_res:
                     flag_is_nsu = True
                     if str(qc_res[0]).strip() in sales_team_ids: flag_nsu_sales_team = True
@@ -324,9 +345,9 @@ try:
 
         # D. Store Guardrail & ZBDA Check
         flag_store_guard = False; zbda_sales_val = 0; zbda_store_val = ""
-        if has_store_guardrail and final_store and mem_id_str:
+        if has_store_guardrail and final_store_display and mem_id_str:
             try:
-                if con.execute(f"SELECT COUNT(*) FROM store_guardrail WHERE TRIM(CAST(Code AS VARCHAR)) = '{final_store}{mem_id_str}'").fetchone()[0] > 0:
+                if con.execute(f"SELECT COUNT(*) FROM store_guardrail WHERE TRIM(CAST(Code AS VARCHAR)) = '{final_store_display}{mem_id_str}'").fetchone()[0] > 0:
                     flag_store_guard = True
                     if has_member_sales:
                         zbda_query = f"""
@@ -335,7 +356,7 @@ try:
                         """
                         zbda_res = con.execute(zbda_query).fetchone()
                         if zbda_res:
-                            zbda_store_val = str(zbda_res[0]).replace('.0', '').strip()
+                            zbda_store_val = normalize_store_id(zbda_res[0])
                             zbda_sales_val = zbda_res[1] if zbda_res[1] is not None else 0
             except: pass
 
@@ -383,30 +404,38 @@ try:
 
         # 2. Current Beat Plan
         elif flag_in_current_beat:
-            if input_sub_cat and file_sub_cat:
-                if input_sub_cat == file_sub_cat:
-                    final_display_rca = "REJECT: Member already in Beat"
+            # --- STRONG LOGIC: SAME STORE CHECK ---
+            # If input store matches the store where member is found -> REJECT
+            if input_store_clean and current_beat_store_clean and (input_store_clean == current_beat_store_clean):
+                 final_display_rca = "REJECT: Member is already in the beat of the same store"
+                 final_status = "MATCH FOUND (Same Store)"
+            
+            # If Member is in Beat but DIFFERENT Store (or store not defined) -> check BU
+            elif input_sub_cat and current_beat_sub_cat:
+                if input_sub_cat == current_beat_sub_cat:
+                    final_display_rca = f"REJECT: Member already in Beat (Store {current_beat_store_clean})"
                 else:
                     prof_keywords = ['o&i corp', 'horeca', 'kam']
                     groc_keywords = ['grocery common + gm kirana', 'gm common', 'grocery-kam']
                     
-                    if file_sub_cat in prof_keywords:
+                    if current_beat_sub_cat in prof_keywords:
                         final_display_rca = "ACTION: Member is present under professional BU get Insti. team approval to add into beat"
-                    elif file_sub_cat in groc_keywords:
-                        target_store = current_month_store_nbr if current_month_store_nbr else final_store
+                    elif current_beat_sub_cat in groc_keywords:
+                        target_store = current_beat_store_clean if current_beat_store_clean else final_store_display
                         final_display_rca = f"ACTION: Member is present under grocery BU get store manager approval from {target_store} approval to add into beat"
                     else:
-                        final_display_rca = f"REJECT: Member in different BU ({file_sub_cat})"
+                        final_display_rca = f"REJECT: Member in different BU ({current_beat_sub_cat})"
             else:
-                final_display_rca = "REJECT: Member already in Beat"
-            final_status = "MATCH FOUND"
+                final_display_rca = f"REJECT: Member already in Beat (Store {current_beat_store_clean})"
+            
+            if final_status == "COMPLETED": final_status = "MATCH FOUND"
 
         # 3. Store Guardrail
         elif flag_store_guard:
             if zbda_sales_val > 0:
                 final_display_rca = "REJECT: Member already in Store gradrail list cannot be added in beat"
             else:
-                target_store = zbda_store_val if zbda_store_val else final_store
+                target_store = zbda_store_val if zbda_store_val else final_store_display
                 final_display_rca = f"ACTION: Member in Store gradrail list get permission by {target_store} store manager"
             final_status = "MATCH FOUND (Guardrail)"
 
@@ -442,12 +471,12 @@ try:
         final_rows_to_write.append([
             REQUEST_ID,
             found_location_val,
-            final_store,
+            final_store_display,
             mem_id_str,
-            final_name,
+            final_name_display,
             final_status,
             final_display_rca,
-            sales_info_str  # <--- Sales Data in Column H
+            sales_info_str 
         ])
 
 except Exception as e:
