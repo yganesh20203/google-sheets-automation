@@ -49,7 +49,6 @@ def normalize_store_id(val):
 
 def get_col_value(row, possible_names):
     """Case-insensitive search for a column value."""
-    # Convert row keys to lower case for comparison
     row_lower = {k.lower(): v for k, v in row.items()}
     for name in possible_names:
         if name.lower() in row_lower:
@@ -59,11 +58,9 @@ def get_col_value(row, possible_names):
 def get_file_date(filename):
     """Parses '_Jan_26' or 'Jan 26' to datetime for sorting."""
     try:
-        # Match Month (3 chars) and Year (2 or 4 digits)
         match = re.search(r'([A-Za-z]{3})[ _-]?(\d{2,4})', filename)
         if match:
             date_str = f"{match.group(1)} {match.group(2)}"
-            # Handle 2 digit year vs 4 digit year
             fmt = "%b %y" if len(match.group(2)) == 2 else "%b %Y"
             return datetime.strptime(date_str, fmt)
     except: pass
@@ -83,7 +80,6 @@ def download_file(file_id, output_path):
         return False
 
 def get_sales_team_ids():
-    """Fetches valid IDs from specific columns in the 3 Google Sheet tabs."""
     valid_ids = set()
     print(">>> Fetching Sales Team Data from Google Sheets...")
     try:
@@ -161,7 +157,6 @@ if download_file(INPUT_FILE_ID, 'user_input.json'):
         df_input = pd.DataFrame(raw)
         df_input.columns = [x.strip().lower() for x in df_input.columns]
         
-        # Fix: Swap Name/ID if user pasted incorrectly
         if 'mem_nbr' in df_input.columns and 'mem_name' in df_input.columns:
             def fix_id(row):
                 val_id = str(row['mem_nbr']).strip()
@@ -238,7 +233,6 @@ if files:
 # ==========================================
 print("Running Analysis...")
 
-# SQL to find member in ANY loaded CSV (except special ones)
 sql_query = """
     SELECT 
         CAST(u.mem_nbr AS VARCHAR) AS User_ID,
@@ -275,11 +269,8 @@ try:
         matched_name = ""
         
         if not user_matches.empty:
-            # We convert row to dict to safely look for columns
             first_row = user_matches.iloc[0].to_dict()
             matched_name = first_row.get('User_Name', '') or first_row.get('mem_name', '')
-            
-            # Find Store in matches
             raw_matched_store = get_col_value(first_row, ['store_nbr', 'Store_NBR', 'Store', 'Store NBR'])
             matched_store_clean = normalize_store_id(raw_matched_store)
         
@@ -313,12 +304,8 @@ try:
             if not current_match.empty:
                 flag_in_current_beat = True
                 curr_row = current_match.iloc[0].to_dict()
-                
-                # Get Store from File
                 raw_store = get_col_value(curr_row, ['store_nbr', 'Store_NBR', 'Store', 'Store NBR'])
                 current_beat_store_clean = normalize_store_id(raw_store)
-                
-                # Get Sub Cat from File
                 raw_cat = get_col_value(curr_row, ['Sub Cat Name', 'Sub_Cat_Name', 'Sub Category', 'Sub_Category', 'sub_cat_name'])
                 if raw_cat: current_beat_sub_cat = str(raw_cat).strip().lower()
 
@@ -327,7 +314,6 @@ try:
         if has_4r_extraction:
             try:
                 qc_res = con.execute(f"SELECT QC_User_ID FROM extraction_4r WHERE CAST(Membership_Nbr AS VARCHAR) = '{mem_id_str}' LIMIT 1").fetchone()
-                # Try quote version if first fails
                 if not qc_res: qc_res = con.execute(f"SELECT \"QC User ID\" FROM extraction_4r WHERE CAST(\"Membership Nbr\" AS VARCHAR) = '{mem_id_str}' LIMIT 1").fetchone()
                 
                 if qc_res:
@@ -391,7 +377,7 @@ try:
             latest_missing_month = missing_files[-1]
 
         # ==========================================================
-        # 4. DECISION TREE (THE LOGIC CORE)
+        # 4. DECISION TREE (IMPROVED STATUSES)
         # ==========================================================
         
         final_display_rca = ""
@@ -399,71 +385,76 @@ try:
 
         # 1. SaveEasy (Highest Priority Reject)
         if flag_save_easy:
-            final_display_rca = "REJECT: SaveEasy active member cannot be added to the Beat"
-            final_status = "MATCH FOUND (SaveEasy)"
+            final_display_rca = "Member is flagged as SaveEasy. Policy restricts adding them to any beat."
+            final_status = "🔴 REJECTED - POLICY"
 
         # 2. Current Beat Plan
         elif flag_in_current_beat:
-            # --- STRONG LOGIC: SAME STORE CHECK ---
-            # If input store matches the store where member is found -> REJECT
+            # Same Store Check
             if input_store_clean and current_beat_store_clean and (input_store_clean == current_beat_store_clean):
-                 final_display_rca = "REJECT: Member is already in the beat of the same store"
-                 final_status = "MATCH FOUND (Same Store)"
+                 final_display_rca = "Member is already active in this store's beat. No action needed."
+                 final_status = "🔴 REJECTED - DUPLICATE"
             
-            # If Member is in Beat but DIFFERENT Store (or store not defined) -> check BU
+            # Different Store / BU Check
             elif input_sub_cat and current_beat_sub_cat:
                 if input_sub_cat == current_beat_sub_cat:
-                    final_display_rca = f"REJECT: Member already in Beat (Store {current_beat_store_clean})"
+                    final_display_rca = f"Member is already active in Store {current_beat_store_clean}. Cannot add to new store."
+                    final_status = "🔴 REJECTED - DUPLICATE"
                 else:
                     prof_keywords = ['o&i corp', 'horeca', 'kam']
                     groc_keywords = ['grocery common + gm kirana', 'gm common', 'grocery-kam']
                     
                     if current_beat_sub_cat in prof_keywords:
-                        final_display_rca = "ACTION: Member is present under professional BU get Insti. team approval to add into beat"
+                        final_display_rca = "Member belongs to Professional BU. Requires approval from Institutional Team."
+                        final_status = "🟡 ACTION REQUIRED"
                     elif current_beat_sub_cat in groc_keywords:
                         target_store = current_beat_store_clean if current_beat_store_clean else final_store_display
-                        final_display_rca = f"ACTION: Member is present under grocery BU get store manager approval from {target_store} approval to add into beat"
+                        final_display_rca = f"Member belongs to Grocery BU (Store {target_store}). Requires approval from that Store Manager."
+                        final_status = "🟡 ACTION REQUIRED"
                     else:
-                        final_display_rca = f"REJECT: Member in different BU ({current_beat_sub_cat})"
+                        final_display_rca = f"Member belongs to a different BU ({current_beat_sub_cat}). Cannot switch."
+                        final_status = "🔴 REJECTED - BU MISMATCH"
             else:
-                final_display_rca = f"REJECT: Member already in Beat (Store {current_beat_store_clean})"
-            
-            if final_status == "COMPLETED": final_status = "MATCH FOUND"
+                final_display_rca = f"Member is already active in Store {current_beat_store_clean}."
+                final_status = "🔴 REJECTED - DUPLICATE"
 
         # 3. Store Guardrail
         elif flag_store_guard:
             if zbda_sales_val > 0:
-                final_display_rca = "REJECT: Member already in Store gradrail list cannot be added in beat"
+                final_display_rca = "Member is in Store Guardrail list and has active sales history. Cannot move."
+                final_status = "🔴 REJECTED - GUARDRAIL"
             else:
                 target_store = zbda_store_val if zbda_store_val else final_store_display
-                final_display_rca = f"ACTION: Member in Store gradrail list get permission by {target_store} store manager"
-            final_status = "MATCH FOUND (Guardrail)"
+                final_display_rca = f"Member is in Store Guardrail list. Requires permission from Store {target_store} Manager."
+                final_status = "🟡 ACTION REQUIRED"
 
         # 4. Pan India
         elif flag_pan_india:
-            final_display_rca = "ACTION: Member already in Pan bharat file get market manager approval to add in beat"
-            final_status = "MATCH FOUND (Pan India)"
+            final_display_rca = "Member is in Pan India list. Requires Market Manager approval."
+            final_status = "🟡 ACTION REQUIRED"
 
         # 5. E-Commerce
         elif flag_zecm_active:
-            final_display_rca = "ACTION: Ecom member get approval from Ecom team"
+            final_display_rca = "Member has active E-Commerce sales. Requires E-Com Team approval."
+            final_status = "🟡 ACTION REQUIRED"
 
         # 6. NSU Logic
         elif flag_is_nsu:
             if flag_nsu_sales_team:
-                final_display_rca = "PROCEED: NSU member will be added to the beat"
+                final_display_rca = "New Sign Up (NSU) verified by Sales Team. Approved for addition."
+                final_status = "🟢 AUTO-APPROVED"
             else:
-                final_display_rca = "ACTION: NSU member onboarded by store team get store manger approval to add in beat"
+                final_display_rca = "New Sign Up (NSU) verified by Store Team. Requires Store Manager approval."
+                final_status = "🟡 ACTION REQUIRED"
 
         # 7. Clean Case / Unknown
         else:
             if latest_missing_month != "N/A":
-                # Re-activation
-                final_display_rca = f"PROCEED: Member will be added in beat (Last excluded: {latest_missing_month})"
+                final_display_rca = f"Returning Member (Last active: {latest_missing_month}). Approved for addition."
+                final_status = "🟢 AUTO-APPROVED"
             else:
-                # Unknown / Not Found in ANY file
-                final_display_rca = "REJECT: Given member not found please check the member nbr and reenter it"
-                final_status = "ERROR"
+                final_display_rca = "Member ID not found in any database. Please verify the number."
+                final_status = "🔴 REJECTED - NOT FOUND"
 
         # --- WRITE ROW ---
         found_location_val = "Current Beat" if flag_in_current_beat else ("Historical Files" if len(found_files)>0 else "N/A")
@@ -481,7 +472,7 @@ try:
 
 except Exception as e:
     print(f"Error: {e}")
-    final_rows_to_write.append([REQUEST_ID, "N/A", "", "", "", "ERROR", str(e), ""])
+    final_rows_to_write.append([REQUEST_ID, "N/A", "", "", "", "SYSTEM ERROR", str(e), ""])
 
 write_values_to_sheet(final_rows_to_write)
 print("Done.")
