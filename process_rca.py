@@ -193,8 +193,12 @@ except: files = []
 if files:
     print(f"Found {len(files)} CSV files. Loading...")
     
+    # Track unique names to prevent duplicates from Drive
+    seen_files = set()
+
     for item in files:
         safe_name = item['name'].replace(" ", "_")
+        
         # 1. SPECIAL FILES
         if "4RExtraction" in safe_name: 
             if download_file(item['id'], safe_name):
@@ -216,13 +220,14 @@ if files:
             if download_file(item['id'], safe_name):
                 try: con.execute(f"CREATE OR REPLACE TABLE save_easy AS SELECT * FROM read_csv_auto('{safe_name}', union_by_name=true)"); has_save_easy = True
                 except: pass
+        
+        # 2. MONTHLY BEAT FILES (Logic to exclude special files first)
+        elif not any(x in safe_name for x in ["Store_Guardrail", "SaveEasy", "Pan_india", "4RExtraction", "Memberwise_sales"]):
+            if safe_name not in seen_files:
+                all_master_files.append(safe_name)
+                seen_files.add(safe_name)
+                if not os.path.exists(safe_name): download_file(item['id'], safe_name)
 
-    # 2. MONTHLY BEAT FILES
-    for item in files:
-        safe_name = item['name'].replace(" ", "_")
-        if any(x in safe_name for x in ["Store_Guardrail", "SaveEasy", "Pan_india", "4RExtraction", "Memberwise_sales"]): continue
-        all_master_files.append(safe_name)
-        if not os.path.exists(safe_name): download_file(item['id'], safe_name)
     all_master_files.sort(key=get_file_date)
 
     current_month_file = all_master_files[-1] if all_master_files else None
@@ -372,9 +377,12 @@ try:
         found_files = []
         if not user_matches.empty: found_files = user_matches['Found_In_File'].unique().tolist()
         if len(found_files) > 0 and len(all_master_files) > len(found_files):
-            missing_files = list(set(all_master_files) - set(found_files))
-            missing_files.sort(key=get_file_date)
-            latest_missing_month = missing_files[-1]
+            # SAFEGUARD: Use set subtraction first to ensure list isn't empty
+            missing_set = set(all_master_files) - set(found_files)
+            if missing_set:
+                missing_files = list(missing_set)
+                missing_files.sort(key=get_file_date)
+                latest_missing_month = missing_files[-1]
 
         # ==========================================================
         # 4. DECISION TREE (IMPROVED STATUSES)
