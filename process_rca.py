@@ -438,7 +438,8 @@ try:
 
         # 4. Pan India
         elif flag_pan_india:
-            final_display_rca = "Member is in Pan India list. Requires Market Manager approval."
+            # CHANGED: Now points to Store Manager instead of Market Manager
+            final_display_rca = "Member is in Pan India list. Requires Store Manager approval."
             final_status = "🟡 ACTION REQUIRED"
 
         # 5. E-Commerce
@@ -461,7 +462,8 @@ try:
                 final_display_rca = f"Returning Member (Last active: {latest_missing_month}). Approved for addition."
                 final_status = "🟢 AUTO-APPROVED"
             else:
-                final_display_rca = "Member ID not found in any database. Please verify the number."
+                # CHANGED MESSAGE HERE
+                final_display_rca = "Given member didn't meet any criteria. Please check if the member number is correct. If yes, try contacting the Sales team."
                 final_status = "🔴 REJECTED - NOT FOUND"
 
         # --- WRITE ROW ---
