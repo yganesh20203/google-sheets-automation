@@ -11,3 +11,5 @@ PyDrive2
 packaging
 requests
 Pillow
+google-auth-httplib2
+pyxlsb
