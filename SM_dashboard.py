@@ -49,21 +49,37 @@ def download_from_drive(drive_service, filename='Daily_KPI_Processing.xlsb'):
             status, done = downloader.next_chunk()
             
     return file_path
-
 def process_and_update_sheet(creds, xlsb_path):
     """Processes the .xlsb and updates the Master Google Sheet."""
     print("Reading .xlsb data...")
-    # Read using pyxlsb. header=None to use integer index
     df = pd.read_excel(xlsb_path, sheet_name='Store Wise Raw Working', engine='pyxlsb', header=None)
     
-    # Force Store Code (Index 3) to string, remove any '.0', and strip spaces
+    # 1. Force Store Code (Index 3 / Col D) to string
     df[3] = df[3].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
     
-    # Col I is index 8. Force Col 8 to numeric, handle errors, fill NaNs.
-    df[8] = pd.to_numeric(df[8], errors='coerce').fillna(0)
+    # 2. CREATE A MAPPING DICTIONARY
+    # Format: {"Exact Name in Google Sheet Col B": pandas_column_index}
+    # Note: Pandas is 0-indexed (A=0, B=1... I=8, P=15, X=23, etc.)
+    metric_mapping = {
+        "Sales Tgt": 8,       # Column I
+        "Sales Ach": 15,      # Column P
+        "MAC Plan": 23,       # Column X
+        "MAC Actual": 29,     # Column AD
+        "Lines Plan": 32,     # Column AG
+        "Lines Act": 37,      # Column AL
+        "OTGS Plan": 16,      # Column Q
+        "OTGS Act": 18,       # Column S
+        "Txns": 41            # Column AP
+    }
     
-    # Group by Store Code and sum the values
-    grouped_data = df.groupby(3)[8].sum().to_dict()
+    # 3. Clean and convert ALL mapped columns to numeric at once
+    cols_to_sum = list(metric_mapping.values())
+    for col_idx in cols_to_sum:
+        df[col_idx] = pd.to_numeric(df[col_idx], errors='coerce').fillna(0)
+    
+    # 4. Group by Store Code and sum ALL target columns simultaneously
+    # This creates a nested dictionary: {'4702': {8: 1000, 15: 950, 23: 500...}}
+    grouped_data = df.groupby(3)[cols_to_sum].sum().to_dict('index')
     
     print("Connecting to target Google Sheet...")
     gc = gspread.authorize(creds)
@@ -73,32 +89,35 @@ def process_and_update_sheet(creds, xlsb_path):
     target_data = worksheet.get_all_values()
     cells_to_update = []
     
-    # Create the IST Timezone and format the current date/time
     ist_timezone = timezone(timedelta(hours=5, minutes=30))
-    current_time = datetime.now(ist_timezone).strftime("%d-%b-%Y %I:%M %p") # e.g., 11-Feb-2026 04:15 PM
+    current_time = datetime.now(ist_timezone).strftime("%d-%b-%Y %I:%M %p")
     
+    # 5. Loop through the Google Sheet and update based on the mapping
     for index, row in enumerate(target_data):
         if len(row) >= 2: 
-            # Cleanly treat Google Sheet data as a string without trailing spaces
             store_code = str(row[0]).strip() 
             cell_type = str(row[1]).strip()
             
-            if store_code in grouped_data and cell_type == "Sales Tgt":
-                # new_val = summed value from the grouped data
-                new_val = grouped_data[store_code]
+            # If the store code exists in our data AND the metric is in our dictionary
+            if store_code in grouped_data and cell_type in metric_mapping:
                 
-                # Update Column C (col=3): FTD_Value
+                # Get the correct column index for this specific metric
+                xlsb_col_index = metric_mapping[cell_type]
+                
+                # Extract the summed value
+                new_val = grouped_data[store_code][xlsb_col_index]
+                
+                # Queue the FTD_Value update (Column C / col=3)
                 cells_to_update.append(gspread.Cell(row=index+1, col=3, value=new_val))
-                
-                # Update Column E (col=5): Last_Updated
+                # Queue the Last_Updated update (Column E / col=5)
                 cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
                 
     if cells_to_update:
-        print(f"Updating {len(cells_to_update)} records in Google Sheets...")
+        print(f"Updating {len(cells_to_update)} cells in Google Sheets...")
         worksheet.update_cells(cells_to_update)
         print("Update complete!")
     else:
-        print("No matching rows found to update. (Check your store codes for mismatches)")
+        print("No matching rows found to update.")
 
 def main():
     creds = authenticate_service_account()
