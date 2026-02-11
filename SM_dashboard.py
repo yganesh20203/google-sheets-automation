@@ -682,6 +682,104 @@ def calculate_derived_metrics(creds):
     else:
         print("No derived metrics to update.")
 
+
+def update_sixth_metric(creds):
+    """Fetches '>50 Lines Invoices' data from a dynamically named tab (yyyy-mm-dd)."""
+    print(f"\n--- Processing Sixth Google Sheet (>50 Lines Invoices) ---")
+    gc = gspread.authorize(creds)
+    
+    # 1. Open Source Sheet
+    source_sheet_id = '1bFVs4weqrMWiBwZVPtlVt-NCtKAzK3Kus0kgWcSn-d4'
+    try:
+        source_doc = gc.open_by_key(source_sheet_id)
+    except Exception as e:
+        print(f"Failed to open sixth source sheet. Error: {e}")
+        return
+
+    # 2. Determine Yesterday's Date (Tab Name format: yyyy-mm-dd)
+    ist_timezone = timezone(timedelta(hours=5, minutes=30))
+    yesterday = (datetime.now(ist_timezone) - timedelta(days=1)).date()
+    target_tab_name = yesterday.strftime('%Y-%m-%d')
+    print(f"Looking for tab named: {target_tab_name}")
+
+    try:
+        # Dynamically grab the specific worksheet matching yesterday's date
+        source_ws = source_doc.worksheet(target_tab_name)
+        source_data = source_ws.get_all_values()
+    except gspread.exceptions.WorksheetNotFound:
+        print(f"Tab '{target_tab_name}' not found in the sixth sheet. Has it been created yet?")
+        return
+    except Exception as e:
+        print(f"Error reading tab '{target_tab_name}': {e}")
+        return
+
+    # Helper function to safely convert sheet values
+    def safe_float(val):
+        val_str = str(val).replace(',', '').strip()
+        if not val_str or val_str in ['-', 'NA', '#DIV/0!', '#N/A']:
+            return 0.0
+        is_percent = False
+        if val_str.endswith('%'):
+            val_str = val_str[:-1]
+            is_percent = True
+        try:
+            num = float(val_str)
+            return num / 100.0 if is_percent else num
+        except ValueError:
+            return 0.0
+
+    # 3. Extract FTD and MTD Data
+    # Column C (Index 2) = Store Code
+    # Column E (Index 4) = FTD
+    # Column O (Index 14) = MTD
+    extracted_data = {}
+    for row in source_data:
+        # Ensure the row actually has enough columns to reach Column O
+        if len(row) >= 15: 
+            store_code = str(row[2]).strip()
+            
+            # Check if this is a valid store code from our global mapping
+            if store_code in STORE_MAPPING: 
+                ftd_val = safe_float(row[4])
+                mtd_val = safe_float(row[14])
+                extracted_data[store_code] = {"FTD": ftd_val, "MTD": mtd_val}
+
+    if not extracted_data:
+        print(f"No valid store data found in tab '{target_tab_name}'.")
+        return
+
+    # 4. Update Target Master Sheet
+    print("Connecting to target Master Sheet...")
+    target_sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
+    target_ws = gc.open_by_key(target_sheet_id).worksheet('Store_Data') 
+    target_data = target_ws.get_all_values()
+    
+    cells_to_update = []
+    current_time = datetime.now(ist_timezone).strftime("%d-%b-%Y %I:%M %p")
+    
+    for index, row in enumerate(target_data):
+        if len(row) >= 2: 
+            store_code = str(row[0]).strip() 
+            cell_type = str(row[1]).strip()
+            
+            # Target specifically the row for ">50 Lines Invoices"
+            if cell_type == ">50 Lines Invoices" and store_code in extracted_data:
+                
+                ftd_val = extracted_data[store_code]["FTD"]
+                mtd_val = extracted_data[store_code]["MTD"]
+                
+                # Queue updates for FTD, MTD, and Timestamp
+                cells_to_update.append(gspread.Cell(row=index+1, col=3, value=ftd_val))
+                cells_to_update.append(gspread.Cell(row=index+1, col=4, value=mtd_val))
+                cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
+                
+    if cells_to_update:
+        print(f"Updating {len(cells_to_update)//3} records for '>50 Lines Invoices'...")
+        target_ws.update_cells(cells_to_update)
+        print("Sixth Sheet Update complete!")
+    else:
+        print("No matching rows found to update for '>50 Lines Invoices'.")
+
         
 def main():
     creds = authenticate_service_account()
@@ -691,6 +789,7 @@ def main():
     update_third_metric(creds)
     update_fourth_metric(creds)
     update_fifth_metric(creds)
+    update_sixth_metric(creds)
     
     # 2. Pull the Sales .xlsb data from Google Drive
     drive_service = build('drive', 'v3', credentials=creds)
