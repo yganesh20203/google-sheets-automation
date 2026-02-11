@@ -110,50 +110,60 @@ def process_and_update_sheet(creds, xlsb_path):
         print("Sales KPI Update complete!")
     else:
         print("No matching rows found to update for Sales KPIs.")
-
 def update_damage_metric(creds):
-    """Fetches Damage data from a separate Google Sheet and updates DT(Damage)."""
-    print(f"\n--- Processing DT(Damage) Data ---")
+    """Fetches multiple metrics from a separate Google Sheet and updates the dashboard."""
+    print(f"\n--- Processing Secondary Google Sheet Data ---")
     gc = gspread.authorize(creds)
     
-    # 1. Open Source Damage Sheet
+    # 1. Open Source Sheet
     source_sheet_id = '1b1JvfLQPhqp160-FA0TCI-10kmnWlDgfY1RM1YR4Qa4'
     try:
-        source_ws = gc.open_by_key(source_sheet_id).sheet1 # Assumes data is on the first tab
+        source_ws = gc.open_by_key(source_sheet_id).sheet1 
         source_data = source_ws.get_all_values()
     except Exception as e:
-        print(f"Failed to open source damage sheet. Did you share it with the Service Account? Error: {e}")
+        print(f"Failed to open source sheet. Error: {e}")
         return
         
     df_source = pd.DataFrame(source_data)
-    
-    if df_source.empty or len(df_source.columns) < 5:
-        print("Damage source sheet is empty or doesn't have enough columns (A to E).")
+    if df_source.empty:
         return
         
-    # 2. Filter for Yesterday's Date in Column A (Index 0)
-    # FIX: Parse as mm/dd/yyyy natively, and normalize() removes any hidden timestamps
+    # 2. Filter for Yesterday's Date (Column A / Index 0)
     df_source[0] = pd.to_datetime(df_source[0], errors='coerce').dt.normalize()
-    
     ist_timezone = timezone(timedelta(hours=5, minutes=30))
     yesterday = (datetime.now(ist_timezone) - timedelta(days=1)).date()
     
-    # Keep only rows where the date matches yesterday
     df_filtered = df_source[df_source[0].dt.date == yesterday].copy()
-    
     if df_filtered.empty:
-        print(f"No damage data found for yesterday ({yesterday.strftime('%m/%d/%Y')}).")
+        print(f"No data found for yesterday ({yesterday.strftime('%m/%d/%Y')}).")
         return
         
-    # 3. Clean Store Code (Col B / Index 1) and Values (Col E / Index 4)
+    # Clean Store Code (Col B / Index 1)
     df_filtered[1] = df_filtered[1].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
-    df_filtered[4] = pd.to_numeric(df_filtered[4], errors='coerce').fillna(0)
     
-    # Group by Store Code and sum the damage values
-    damage_data = df_filtered.groupby(1)[4].sum().to_dict()
+    # ==========================================
+    # 3. CREATE YOUR MAPPING DICTIONARY HERE
+    # Format: {"Exact Name in Master Sheet": source_sheet_column_index}
+    # Index guide: A=0, B=1, C=2, D=3, E=4, F=5, G=6...
+    # ==========================================
+    sheet_metric_mapping = {
+        "DT(Damage)": 4,    # Column E
+        "DD(Expiry)": 5,    # Assuming this is in Column F. Change as needed!
+        "CO(shrink)": 6     # Assuming this is in Column G. Change as needed!
+    }
+    
+    # Clean and convert all mapped columns to numbers
+    cols_to_sum = list(sheet_metric_mapping.values())
+    for col_idx in cols_to_sum:
+        # Ensures that if a column is missing in the sheet, it doesn't crash
+        if col_idx in df_filtered.columns: 
+            df_filtered[col_idx] = pd.to_numeric(df_filtered[col_idx], errors='coerce').fillna(0)
+    
+    # Group by Store Code and sum ALL mapped columns simultaneously
+    grouped_data = df_filtered.groupby(1)[cols_to_sum].sum().to_dict('index')
     
     # 4. Update Target Master Sheet
-    print("Connecting to target Google Sheet for DT(Damage)...")
+    print("Connecting to target Google Sheet...")
     target_sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
     target_ws = gc.open_by_key(target_sheet_id).worksheet('Store_Data') 
     target_data = target_ws.get_all_values()
@@ -166,20 +176,25 @@ def update_damage_metric(creds):
             store_code = str(row[0]).strip() 
             cell_type = str(row[1]).strip()
             
-            # Check if store is in our damage data AND the row is for DT(Damage)
-            if store_code in damage_data and cell_type == "DT(Damage)":
-                new_val = damage_data[store_code]
+            # If store code is found AND the row name matches our dictionary
+            if store_code in grouped_data and cell_type in sheet_metric_mapping:
+                # Get the correct column index from the dictionary
+                col_index = sheet_metric_mapping[cell_type]
                 
-                # Update FTD_Value (Col C) & Last_Updated (Col E)
-                cells_to_update.append(gspread.Cell(row=index+1, col=3, value=new_val))
-                cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
+                # Check if that data exists for the store
+                if col_index in grouped_data[store_code]:
+                    new_val = grouped_data[store_code][col_index]
+                    
+                    # Update FTD_Value (Col C) & Last_Updated (Col E)
+                    cells_to_update.append(gspread.Cell(row=index+1, col=3, value=new_val))
+                    cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
                 
     if cells_to_update:
-        print(f"Updating {len(cells_to_update)//2} DT(Damage) records in Google Sheets...")
+        print(f"Updating {len(cells_to_update)//2} records from the secondary sheet...")
         target_ws.update_cells(cells_to_update)
-        print("DT(Damage) Update complete!")
+        print("Secondary Sheet Update complete!")
     else:
-        print("No matching rows found to update for DT(Damage).")
+        print("No matching rows found to update for secondary sheet.")
 
 def main():
     creds = authenticate_service_account()
