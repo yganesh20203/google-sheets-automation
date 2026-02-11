@@ -1127,31 +1127,39 @@ def process_vehicle_stats(creds, file_path):
     else:
         print("No matching rows found to update for Vehicle Stats.")
 
+
 def update_expense_metrics(creds):
-    """Smartly finds the header row and processes expenses from Col U (Settlement) or L (Invoice)."""
-    print(f"\n--- Processing Expense Metrics (Smart Search) ---")
+    """Fetches expenses from the tab named 'Sheet1' (ignoring the Dashboard tab)."""
+    print(f"\n--- Processing Expense Metrics (Targeting 'Sheet1') ---")
     gc = gspread.authorize(creds)
     
     source_sheet_id = '1B7sKYLDr0KPA8tCMDUHgYo-fO4yBDnj6K3ubXCC8gfs'
     try:
-        source_ws = gc.open_by_key(source_sheet_id).sheet1 
+        # FIX: Open the specific tab named 'Sheet1' instead of the first tab
+        source_ws = gc.open_by_key(source_sheet_id).worksheet('Sheet1')
         source_data = source_ws.get_all_values()
+    except gspread.exceptions.WorksheetNotFound:
+        print("Error: Could not find a tab named 'Sheet1'. Please check the tab name at the bottom of your Google Sheet.")
+        return
     except Exception as e:
         print(f"Failed to open expense source sheet. Error: {e}")
         return
 
     # 1. FIND THE HEADER ROW AUTOMATICALLY
     header_index = -1
-    for i, row in enumerate(source_data[:15]): # Scan first 15 rows only
-        # Look for a row that contains our key headers
+    # Scan first 10 rows for the real header
+    for i, row in enumerate(source_data[:10]): 
         row_str = [str(x).strip().lower() for x in row]
+        # We look for "store code" and "account head" to confirm it's the right row
         if "store code" in row_str and "account head" in row_str:
             header_index = i
             print(f"Found Data Headers at Row {i+1}. Processing rows below it...")
             break
             
     if header_index == -1:
-        print("CRITICAL ERROR: Could not find 'Store Code' header in the first 15 rows.")
+        print("CRITICAL ERROR: Could not find 'Store Code' header in 'Sheet1'.")
+        # Diagnostic print to help if it fails again
+        print(f"Top row of Sheet1 looks like: {source_data[0]}")
         return
 
     # 2. Setup Processing
@@ -1178,22 +1186,23 @@ def update_expense_metrics(creds):
 
     ftd_data = {} 
     mtd_data = {} 
+    rows_processed = 0
 
     # 3. Process Data starting AFTER the header row
-    # The columns are fixed relative to the header: 
-    # Store Code (Col D/Idx 3), Date (Col F/Idx 5), Category (Col G/Idx 6), Status (Col B/Idx 1)
-    # Amount (Col U/Idx 20)
-    
-    rows_processed = 0
+    # Based on your screenshot, the columns should be:
+    # Col D (Index 3): Store Code
+    # Col F (Index 5): Date
+    # Col G (Index 6): Account Head (Category)
+    # Col L (Index 11): Invoice Amount
+    # Col U (Index 20): Settlement Amount
     
     for row in source_data[header_index + 1:]:
-        if len(row) < 2: continue # Skip empty rows
+        if len(row) < 4: continue # Skip empty rows
         
-        # Pad row if it's too short to reach Column U
+        # Pad row if short
         if len(row) <= 20:
             row += [''] * (21 - len(row))
 
-        # Check Status (Col B / Index 1)
         status = str(row[1]).strip().lower()
         if status == "cancelled": continue 
 
@@ -1216,19 +1225,17 @@ def update_expense_metrics(creds):
             # TRY COLUMN U (Settlement) FIRST
             val = safe_float(row[20])
             
-            # FALLBACK: If Col U is 0/Empty, try Col L (Invoice Amt - Index 11)
-            # This fixes the "0" issue for Submitted rows that aren't settled yet
+            # FALLBACK: If Col U is 0, use Col L (Invoice Amt - Index 11)
+            # This captures "Submitted" expenses that aren't settled yet
             if val == 0:
                 val = safe_float(row[11])
 
             if store_code not in ftd_data: ftd_data[store_code] = {}
             if store_code not in mtd_data: mtd_data[store_code] = {}
 
-            # MTD Logic
             if start_of_month <= row_date <= yesterday:
                 mtd_data[store_code][category] = mtd_data[store_code].get(category, 0) + val
             
-            # FTD Logic
             if row_date == yesterday:
                 ftd_data[store_code][category] = ftd_data[store_code].get(category, 0) + val
 
@@ -1236,8 +1243,7 @@ def update_expense_metrics(creds):
 
     # 4. Update Target Master Sheet
     print("Connecting to target Master Sheet...")
-    target_sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
-    target_ws = gc.open_by_key(target_sheet_id).worksheet('Store_Data') 
+    target_ws = gc.open_by_key('1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34').worksheet('Store_Data') 
     target_data = target_ws.get_all_values()
     
     cells_to_update = []
