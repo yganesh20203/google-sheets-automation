@@ -1128,8 +1128,8 @@ def process_vehicle_stats(creds, file_path):
         print("No matching rows found to update for Vehicle Stats.")
 
 def update_expense_metrics(creds):
-    """DIAGNOSTIC MODE: Prints raw data to find the correct columns."""
-    print(f"\n--- DIAGNOSTIC: Inspecting Expense Sheet ---")
+    """Smartly finds the header row and processes expenses from Col U (Settlement) or L (Invoice)."""
+    print(f"\n--- Processing Expense Metrics (Smart Search) ---")
     gc = gspread.authorize(creds)
     
     source_sheet_id = '1B7sKYLDr0KPA8tCMDUHgYo-fO4yBDnj6K3ubXCC8gfs'
@@ -1137,28 +1137,30 @@ def update_expense_metrics(creds):
         source_ws = gc.open_by_key(source_sheet_id).sheet1 
         source_data = source_ws.get_all_values()
     except Exception as e:
-        print(f"Failed to open sheet. Error: {e}")
+        print(f"Failed to open expense source sheet. Error: {e}")
         return
 
-    print(f"Total Rows Found: {len(source_data)}")
-    if len(source_data) < 2: return
+    # 1. FIND THE HEADER ROW AUTOMATICALLY
+    header_index = -1
+    for i, row in enumerate(source_data[:15]): # Scan first 15 rows only
+        # Look for a row that contains our key headers
+        row_str = [str(x).strip().lower() for x in row]
+        if "store code" in row_str and "account head" in row_str:
+            header_index = i
+            print(f"Found Data Headers at Row {i+1}. Processing rows below it...")
+            break
+            
+    if header_index == -1:
+        print("CRITICAL ERROR: Could not find 'Store Code' header in the first 15 rows.")
+        return
 
-    # --- PRINT THE HEADER AND FIRST 2 ROWS RAW ---
-    print("\n[HEADER ROW]:")
-    print(source_data[0])
-    
-    print("\n[ROW 1 RAW]:")
-    print(source_data[1])
-    
-    print("\n[ROW 2 RAW]:")
-    print(source_data[2])
-    # ---------------------------------------------
-
-    # Define standard targets
+    # 2. Setup Processing
     ist_timezone = timezone(timedelta(hours=5, minutes=30))
     yesterday = (datetime.now(ist_timezone) - timedelta(days=1)).date()
     start_of_month = yesterday.replace(day=1)
     
+    print(f"Expenses: FTD for {yesterday} | MTD from {start_of_month}")
+
     target_categories = [
         "Stationery Expenses", 
         "Associate Relations", 
@@ -1166,51 +1168,78 @@ def update_expense_metrics(creds):
         "Repair and Maintenance"
     ]
 
+    def safe_float(val):
+        val_str = str(val).replace(',', '').strip()
+        if not val_str or val_str in ['-', 'NA', '#DIV/0!', '#N/A']: return 0.0
+        try:
+            return float(val_str)
+        except ValueError:
+            return 0.0
+
     ftd_data = {} 
     mtd_data = {} 
 
-    # Normal Processing Attempt
-    for i, row in enumerate(source_data[1:]): 
-        # Pad row to ensure we can reach Column U (Index 20)
+    # 3. Process Data starting AFTER the header row
+    # The columns are fixed relative to the header: 
+    # Store Code (Col D/Idx 3), Date (Col F/Idx 5), Category (Col G/Idx 6), Status (Col B/Idx 1)
+    # Amount (Col U/Idx 20)
+    
+    rows_processed = 0
+    
+    for row in source_data[header_index + 1:]:
+        if len(row) < 2: continue # Skip empty rows
+        
+        # Pad row if it's too short to reach Column U
         if len(row) <= 20:
             row += [''] * (21 - len(row))
 
+        # Check Status (Col B / Index 1)
         status = str(row[1]).strip().lower()
         if status == "cancelled": continue 
 
-        # Try to read Store Code from Col D (Index 3)
-        store_code_raw = row[3]
-        store_code = str(store_code_raw).replace('.0', '').strip()
+        # Store Code (Col D / Index 3)
+        store_code = str(row[3]).replace('.0', '').strip()
         
+        # Category (Col G / Index 6)
         category = str(row[6]).strip()
-        
-        # DEBUG: Print what we found in Column D for the first 5 rows
-        if i < 5:
-            print(f"DEBUG ROW {i+1}: Col D (Store)='{store_code}' | Col G (Cat)='{category}'")
 
         try:
+            # Date (Col F / Index 5)
             row_date = pd.to_datetime(row[5], errors='coerce').date()
             if pd.isna(row_date): continue
         except:
             continue
 
         if category in target_categories:
-            # Try parsing Column U (Index 20)
-            val_str = str(row[20]).replace(',', '').strip()
-            val = float(val_str) if val_str and val_str not in ['-', 'NA'] else 0.0
+            rows_processed += 1
             
+            # TRY COLUMN U (Settlement) FIRST
+            val = safe_float(row[20])
+            
+            # FALLBACK: If Col U is 0/Empty, try Col L (Invoice Amt - Index 11)
+            # This fixes the "0" issue for Submitted rows that aren't settled yet
+            if val == 0:
+                val = safe_float(row[11])
+
             if store_code not in ftd_data: ftd_data[store_code] = {}
             if store_code not in mtd_data: mtd_data[store_code] = {}
 
+            # MTD Logic
             if start_of_month <= row_date <= yesterday:
                 mtd_data[store_code][category] = mtd_data[store_code].get(category, 0) + val
+            
+            # FTD Logic
             if row_date == yesterday:
                 ftd_data[store_code][category] = ftd_data[store_code].get(category, 0) + val
 
-    # Update Master Sheet
-    print("\nConnecting to target Master Sheet...")
-    target_ws = gc.open_by_key('1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34').worksheet('Store_Data') 
+    print(f"Processed {rows_processed} valid expense rows.")
+
+    # 4. Update Target Master Sheet
+    print("Connecting to target Master Sheet...")
+    target_sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
+    target_ws = gc.open_by_key(target_sheet_id).worksheet('Store_Data') 
     target_data = target_ws.get_all_values()
+    
     cells_to_update = []
     current_time = datetime.now(ist_timezone).strftime("%d-%b-%Y %I:%M %p")
     
@@ -1218,16 +1247,21 @@ def update_expense_metrics(creds):
         if len(row) >= 2: 
             store_code = str(row[0]).strip() 
             cell_type = str(row[1]).strip()
+            
             if cell_type in target_categories:
                 ftd_val = ftd_data.get(store_code, {}).get(cell_type, 0)
                 mtd_val = mtd_data.get(store_code, {}).get(cell_type, 0)
+                
                 cells_to_update.append(gspread.Cell(row=index+1, col=3, value=ftd_val))
                 cells_to_update.append(gspread.Cell(row=index+1, col=4, value=mtd_val))
                 cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
                 
     if cells_to_update:
+        print(f"Updating {len(cells_to_update)//3} expense records...")
         target_ws.update_cells(cells_to_update)
-        print("Diagnostic Run Complete.")
+        print("Expense Metrics Update complete!")
+    else:
+        print("No matching expense rows found to update.")
         
 
         
