@@ -1,0 +1,36 @@
+name: Daily SM Dashboard Update
+
+# This schedule runs it every day. 
+# Adjust the cron time (it uses UTC time). 
+# Right now, this is set to run at 02:00 UTC (which is 7:30 AM IST)
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch: # This allows you to click a button to run it manually!
+
+jobs:
+  update-dashboard:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10' # Or whichever version you are using
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Create Credentials File from Secret
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: |
+          echo "$GOOGLE_CREDENTIALS" > credentials.json
+
+      - name: Run Dashboard Script
+        run: python SM_Dashboard.pyrun_dashboard.yml
