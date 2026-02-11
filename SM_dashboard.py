@@ -434,17 +434,265 @@ def update_fourth_metric(creds):
         print("Fourth Sheet Update complete!")
     else:
         print("No matching rows found to update for the fourth sheet.")
+
+def update_fifth_metric(creds):
+    """Fetches 'AR' data, dynamically finding the date columns, and averages MTD."""
+    print(f"\n--- Processing Fifth Google Sheet (AR Metric) ---")
+    gc = gspread.authorize(creds)
+    
+    # 1. Open Source Sheet
+    source_sheet_id = '1NiQ-PpFDgruxsSmW-jfLSEgdejQq5EaJXHFJ5zwJn30'
+    try:
+        # Targeting GID 1023010443
+        source_ws = gc.open_by_key(source_sheet_id).get_worksheet_by_id(1023010443) 
+        source_data = source_ws.get_all_values()
+    except Exception as e:
+        print(f"Failed to open fifth source sheet. Error: {e}")
+        return
+
+    if len(source_data) < 3:
+        print("Fifth sheet does not have enough rows for data extraction.")
+        return
+
+    # 2. Determine Dates
+    ist_timezone = timezone(timedelta(hours=5, minutes=30))
+    yesterday = (datetime.now(ist_timezone) - timedelta(days=1)).date()
+    start_of_month = yesterday.replace(day=1)
+    current_year = yesterday.year
+
+    print(f"Finding FTD for {yesterday} and MTD Average from {start_of_month} to {yesterday}")
+
+    # 3. Dynamically find the Column Indexes in Row 2 (Python Index 1)
+    date_row = source_data[1] 
+    ftd_col_idx = -1
+    mtd_col_indices = []
+
+    for idx, cell_val in enumerate(date_row):
+        # Clean the string (e.g., "Tue, Feb 3," -> "Tue, Feb 3")
+        val_str = str(cell_val).strip().rstrip(',')
+        if not val_str: 
+            continue
+            
+        try:
+            # Safely append the year so Pandas parses it perfectly without warnings
+            if str(current_year) not in val_str:
+                val_str = f"{val_str} {current_year}"
+                
+            parsed_date = pd.to_datetime(val_str).date()
+            
+            # Map the exact columns
+            if parsed_date == yesterday:
+                ftd_col_idx = idx
+            if start_of_month <= parsed_date <= yesterday:
+                mtd_col_indices.append(idx)
+        except Exception:
+            pass # Ignore cells that aren't dates
+
+    if ftd_col_idx == -1 and not mtd_col_indices:
+        print("Could not find yesterday's date or current month dates in Row 2.")
+        return
+
+    # Helper function to clean numbers (handles percentages if they exist)
+    def safe_float(val):
+        val_str = str(val).replace(',', '').strip()
+        if not val_str or val_str in ['-', 'NA', '#DIV/0!', '#N/A']: return 0.0
+        is_percent = False
+        if val_str.endswith('%'):
+            val_str = val_str[:-1]
+            is_percent = True
+        try:
+            num = float(val_str)
+            return num / 100.0 if is_percent else num
+        except ValueError:
+            return 0.0
+
+    # 4. Extract Data from Row 3 onwards (Python Index 2+)
+    ftd_data = {}
+    mtd_data = {}
+
+    for row in source_data[2:]:
+        if len(row) > 1:
+            # Store names are in Column B (Index 1)
+            store_name = str(row[1]).strip() 
+            if store_name:
+                
+                # Extract FTD
+                if ftd_col_idx != -1 and ftd_col_idx < len(row):
+                    ftd_data[store_name] = safe_float(row[ftd_col_idx])
+                else:
+                    ftd_data[store_name] = 0.0
+                
+                # Extract MTD and calculate AVERAGE
+                if mtd_col_indices:
+                    # Get all valid numeric values for the month up to yesterday
+                    mtd_vals = [safe_float(row[i]) for i in mtd_col_indices if i < len(row)]
+                    # Average them out (Sum / Count)
+                    mtd_data[store_name] = sum(mtd_vals) / len(mtd_col_indices) if len(mtd_col_indices) > 0 else 0.0
+                else:
+                    mtd_data[store_name] = 0.0
+
+    # 5. Update Target Master Sheet
+    print("Connecting to target Google Sheet...")
+    target_sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
+    target_ws = gc.open_by_key(target_sheet_id).worksheet('Store_Data') 
+    target_data = target_ws.get_all_values()
+    
+    cells_to_update = []
+    current_time = datetime.now(ist_timezone).strftime("%d-%b-%Y %I:%M %p")
+    
+    for index, row in enumerate(target_data):
+        if len(row) >= 2: 
+            store_code = str(row[0]).strip() 
+            cell_type = str(row[1]).strip()
+            
+            # Match strictly against "AR" and our Store Mapping
+            if cell_type == "AR" and store_code in STORE_MAPPING:
+                
+                target_store_name = STORE_MAPPING[store_code]
+                
+                ftd_val = ftd_data.get(target_store_name, 0.0)
+                mtd_val = mtd_data.get(target_store_name, 0.0)
+                
+                cells_to_update.append(gspread.Cell(row=index+1, col=3, value=ftd_val))
+                cells_to_update.append(gspread.Cell(row=index+1, col=4, value=mtd_val))
+                cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
+                
+    if cells_to_update:
+        print(f"Updating {len(cells_to_update)//3} records for the fifth sheet...")
+        target_ws.update_cells(cells_to_update)
+        print("Fifth Sheet (AR) Update complete!")
+    else:
+        print("No matching rows found to update for AR metric.")
+
+def calculate_derived_metrics(creds):
+    """Calculates all percentages and ratios from the Master Sheet's updated values."""
+    print("\n--- Calculating Derived Metrics (%, LPB, ABV, TPC) ---")
+    gc = gspread.authorize(creds)
+    
+    target_sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
+    worksheet = gc.open_by_key(target_sheet_id).worksheet('Store_Data') 
+    target_data = worksheet.get_all_values()
+    
+    # store_data will hold the base numbers: {'4702': {'Sales Ach': {'FTD': 100, 'MTD': 500}, ...}}
+    store_data = {}
+    
+    # row_mappings tracks the exact row index to push the calculated data back into
+    row_mappings = {} 
+    
+    # --- FIRST PASS: Collect all base metrics and map the rows ---
+    for idx, row in enumerate(target_data):
+        if len(row) >= 2:
+            store_code = str(row[0]).strip()
+            cell_type = str(row[1]).strip()
+            
+            if not store_code: continue
+            if store_code not in store_data: store_data[store_code] = {}
+            
+            # Safely convert FTD and MTD to floats
+            try:
+                ftd = float(str(row[2]).replace(',', '').strip() or 0)
+            except: ftd = 0.0
+            try:
+                mtd = float(str(row[3]).replace(',', '').strip() or 0)
+            except: mtd = 0.0
+            
+            store_data[store_code][cell_type] = {'FTD': ftd, 'MTD': mtd}
+            
+            # Smart context for repeated "Vs Plan" rows
+            if cell_type == "Vs Plan":
+                prev_type = str(target_data[idx-1][1]).strip() if idx > 0 else ""
+                
+                if prev_type == "Sales Ach": unique_key = "Sales Vs Plan"
+                elif prev_type == "MAC Actual": unique_key = "MAC Vs Plan"
+                elif prev_type == "Lines Act": unique_key = "Lines Vs Plan"
+                elif prev_type == "OTGS Act": unique_key = "OTGS Sales Vs Plan"
+                else: unique_key = f"Unknown_Vs_Plan_{idx}"
+                
+                row_mappings[(store_code, unique_key)] = idx + 1 # 1-indexed for gspread
+            else:
+                row_mappings[(store_code, cell_type)] = idx + 1
+
+    cells_to_update = []
+    ist_timezone = timezone(timedelta(hours=5, minutes=30))
+    current_time = datetime.now(ist_timezone).strftime("%d-%b-%Y %I:%M %p")
+    
+    # Helper function for division to prevent ZeroDivisionError (returns 0.0 if denominator is 0)
+    def safe_div(num, den):
+        return num / den if den else 0.0
+
+    # --- SECOND PASS: Calculate and queue updates ---
+    for store_code, metrics in store_data.items():
+        
+        # Calculate all required derived metrics simultaneously
+        derived_calcs = {
+            "Sales Vs Plan": {
+                "FTD": safe_div(metrics.get("Sales Ach", {}).get("FTD", 0), metrics.get("Sales Tgt", {}).get("FTD", 0)),
+                "MTD": safe_div(metrics.get("Sales Ach", {}).get("MTD", 0), metrics.get("Sales Tgt", {}).get("MTD", 0))
+            },
+            "MAC Vs Plan": {
+                "FTD": safe_div(metrics.get("MAC Actual", {}).get("FTD", 0), metrics.get("MAC Plan", {}).get("FTD", 0)),
+                "MTD": safe_div(metrics.get("MAC Actual", {}).get("MTD", 0), metrics.get("MAC Plan", {}).get("MTD", 0))
+            },
+            "Lines Vs Plan": {
+                "FTD": safe_div(metrics.get("Lines Act", {}).get("FTD", 0), metrics.get("Lines Plan", {}).get("FTD", 0)),
+                "MTD": safe_div(metrics.get("Lines Act", {}).get("MTD", 0), metrics.get("Lines Plan", {}).get("MTD", 0))
+            },
+            "LPB": {
+                "FTD": safe_div(metrics.get("Lines Act", {}).get("FTD", 0), metrics.get("Txns", {}).get("FTD", 0)),
+                "MTD": safe_div(metrics.get("Lines Act", {}).get("MTD", 0), metrics.get("Txns", {}).get("MTD", 0))
+            },
+            "OTGS Sales Vs Plan": {
+                "FTD": safe_div(metrics.get("OTGS Act", {}).get("FTD", 0), metrics.get("OTGS Plan", {}).get("FTD", 0)),
+                "MTD": safe_div(metrics.get("OTGS Act", {}).get("MTD", 0), metrics.get("OTGS Plan", {}).get("MTD", 0))
+            },
+            "ABV": {
+                "FTD": safe_div(metrics.get("Sales Ach", {}).get("FTD", 0), metrics.get("Txns", {}).get("FTD", 0)),
+                "MTD": safe_div(metrics.get("Sales Ach", {}).get("MTD", 0), metrics.get("Txns", {}).get("MTD", 0))
+            },
+            "TPC": {
+                "FTD": safe_div(metrics.get("Txns", {}).get("FTD", 0), metrics.get("MAC Actual", {}).get("FTD", 0)),
+                "MTD": safe_div(metrics.get("Txns", {}).get("MTD", 0), metrics.get("MAC Actual", {}).get("MTD", 0))
+            },
+            "DT%": {
+                "FTD": safe_div(metrics.get("DT(Damage)", {}).get("FTD", 0), metrics.get("Sales Ach", {}).get("FTD", 0)),
+                "MTD": safe_div(metrics.get("DT(Damage)", {}).get("MTD", 0), metrics.get("Sales Ach", {}).get("MTD", 0))
+            },
+            "DD%": {
+                "FTD": safe_div(metrics.get("DD(Expiry)", {}).get("FTD", 0), metrics.get("Sales Ach", {}).get("FTD", 0)),
+                "MTD": safe_div(metrics.get("DD(Expiry)", {}).get("MTD", 0), metrics.get("Sales Ach", {}).get("MTD", 0))
+            },
+            "CO%": {
+                "FTD": safe_div(metrics.get("CO(shrink)", {}).get("FTD", 0), metrics.get("Sales Ach", {}).get("FTD", 0)),
+                "MTD": safe_div(metrics.get("CO(shrink)", {}).get("MTD", 0), metrics.get("Sales Ach", {}).get("MTD", 0))
+            }
+        }
+        
+        # Build the batch update payload
+        for calc_name, vals in derived_calcs.items():
+            if (store_code, calc_name) in row_mappings:
+                row_idx = row_mappings[(store_code, calc_name)]
+                cells_to_update.append(gspread.Cell(row=row_idx, col=3, value=vals["FTD"]))
+                cells_to_update.append(gspread.Cell(row=row_idx, col=4, value=vals["MTD"]))
+                cells_to_update.append(gspread.Cell(row=row_idx, col=5, value=current_time))
+
+    if cells_to_update:
+        print(f"Updating {len(cells_to_update)//3} derived metric records in Google Sheets...")
+        worksheet.update_cells(cells_to_update)
+        print("Derived Metrics Update complete!")
+    else:
+        print("No derived metrics to update.")
+
+        
 def main():
     creds = authenticate_service_account()
     
-    # --- STEP 1: Process the Damage Sheet (T-1) ---
+    # 1. Pull data from all secondary APIs
     update_damage_metric(creds)
-    
-    # --- STEP 2: Process the New T-2 Sheet ---
     update_third_metric(creds)
     update_fourth_metric(creds)
+    update_fifth_metric(creds)
     
-    # --- STEP 3: Process the Sales .xlsb File from Drive ---
+    # 2. Pull the Sales .xlsb data from Google Drive
     drive_service = build('drive', 'v3', credentials=creds)
     file_path = download_from_drive(drive_service)
     
@@ -454,6 +702,9 @@ def main():
         finally:
             if os.path.exists(file_path):
                 os.remove(file_path)
+                
+    # 3. CALCULATE ALL DERIVED METRICS LAST!
+    calculate_derived_metrics(creds)
 
 if __name__ == '__main__':
     main()
