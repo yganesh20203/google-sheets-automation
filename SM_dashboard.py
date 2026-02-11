@@ -347,51 +347,52 @@ def update_fourth_metric(creds):
         print(f"Failed to open fourth source sheet. Error: {e}")
         return
 
-    # Helper function to safely convert sheet values to numbers
+    # Helper function to safely convert sheet values (like "2.4%") to numbers (0.024)
     def safe_float(val):
+        val_str = str(val).replace(',', '').strip()
+        if not val_str or val_str in ['-', 'NA', '#DIV/0!', '#N/A']:
+            return 0.0
+            
+        is_percent = False
+        if val_str.endswith('%'):
+            val_str = val_str[:-1] # Remove the '%' symbol
+            is_percent = True
+            
         try:
-            return float(str(val).replace(',', '').strip())
+            num = float(val_str)
+            # If it was a percentage, divide by 100 so Google Sheets reads it correctly
+            return num / 100.0 if is_percent else num
         except ValueError:
             return 0.0
 
     # 2. Extract FTD Data (Rows 33 to 64 -> Python Index 32 to 64)
-    # Mapping: Col C(2), Col D(3), Col J(9), Col K(10)
     ftd_data = {}
     for row in source_data[32:64]:
-        if len(row) >= 11: 
-            store_name = str(row[0]).strip()
+        if len(row) > 1: 
+            # FIXED: Store names are in Column B (Index 1)
+            store_name = str(row[1]).strip()
             if store_name:
-                ftd_data[store_name] = {
-                    2: safe_float(row[2]),
-                    3: safe_float(row[3]),
-                    9: safe_float(row[9]),
-                    10: safe_float(row[10])
-                }
+                # Dynamically extract ALL columns in the row so you can map anything you need
+                ftd_data[store_name] = {i: safe_float(val) for i, val in enumerate(row)}
 
     # Extract MTD Data (Rows 72 to 102 -> Python Index 71 to 102)
-    # Mapping: Col C(2), Col D(3), Col I(8), Col J(9)
     mtd_data = {}
     for row in source_data[71:102]:
-        if len(row) >= 10: 
-            store_name = str(row[0]).strip()
+        if len(row) > 1: 
+            # FIXED: Store names are in Column B (Index 1)
+            store_name = str(row[1]).strip()
             if store_name:
-                mtd_data[store_name] = {
-                    2: safe_float(row[2]),
-                    3: safe_float(row[3]),
-                    8: safe_float(row[8]),
-                    9: safe_float(row[9])
-                }
+                mtd_data[store_name] = {i: safe_float(val) for i, val in enumerate(row)}
 
     # ==========================================
     # 3. MAPPING TO DASHBOARD ROWS
-    # Change "METRIC_NAME_HERE" to the exact names in Column B of your Master Dashboard
     # ==========================================
     fourth_sheet_mapping = {
         "Canc%":   {"FTD": 2,  "MTD": 2}, # C mapped to C
         "RTO%":   {"FTD": 3,  "MTD": 3}, # D mapped to D
         "D1": {"FTD": 9,  "MTD": 8}, # J mapped to I
         "D2": {"FTD": 10, "MTD": 9},
-        "OFR %": {"FTD": 12, "MTD": 11}# K mapped to J
+        "OFR %": {"FTD": 12, "MTD": 11} # Added from your update
     }
 
     # 4. Update Target Master Sheet
