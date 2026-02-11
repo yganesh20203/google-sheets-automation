@@ -368,19 +368,19 @@ def update_fourth_metric(creds):
     # 2. Extract FTD Data (Rows 33 to 64 -> Python Index 32 to 64)
     ftd_data = {}
     for row in source_data[32:64]:
-        if len(row) > 1: 
-            # FIXED: Store names are in Column B (Index 1)
-            store_name = str(row[1]).strip()
+        if len(row) > 0: 
+            # CRITICAL FIX: Store names are in Column A (Index 0), NOT Column B!
+            store_name = str(row[0]).strip()
             if store_name:
-                # Dynamically extract ALL columns in the row so you can map anything you need
+                # Dynamically extract ALL columns in the row
                 ftd_data[store_name] = {i: safe_float(val) for i, val in enumerate(row)}
 
     # Extract MTD Data (Rows 72 to 102 -> Python Index 71 to 102)
     mtd_data = {}
     for row in source_data[71:102]:
-        if len(row) > 1: 
-            # FIXED: Store names are in Column B (Index 1)
-            store_name = str(row[1]).strip()
+        if len(row) > 0: 
+            # CRITICAL FIX: Store names are in Column A (Index 0), NOT Column B!
+            store_name = str(row[0]).strip()
             if store_name:
                 mtd_data[store_name] = {i: safe_float(val) for i, val in enumerate(row)}
 
@@ -392,7 +392,7 @@ def update_fourth_metric(creds):
         "RTO%":   {"FTD": 3,  "MTD": 3}, # D mapped to D
         "D1": {"FTD": 9,  "MTD": 8}, # J mapped to I
         "D2": {"FTD": 10, "MTD": 9},
-        "OFR %": {"FTD": 12, "MTD": 11} # Added from your update
+        "OFR %": {"FTD": 12, "MTD": 11} # Mapped perfectly based on your previous edit
     }
 
     # 4. Update Target Master Sheet
@@ -434,7 +434,6 @@ def update_fourth_metric(creds):
         print("Fourth Sheet Update complete!")
     else:
         print("No matching rows found to update for the fourth sheet.")
-
 def main():
     creds = authenticate_service_account()
     
