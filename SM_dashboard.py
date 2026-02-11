@@ -64,7 +64,9 @@ def process_and_update_sheet(creds, xlsb_path):
     print("Connecting to target Google Sheet...")
     gc = gspread.authorize(creds)
     sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
-    worksheet = gc.open_by_key(sheet_id).sheet1 
+    
+    # UPDATED: Pointing specifically to the "Store_Data" tab
+    worksheet = gc.open_by_key(sheet_id).worksheet('Store_Data') 
     
     target_data = worksheet.get_all_values()
     cells_to_update = []
