@@ -1126,9 +1126,9 @@ def process_vehicle_stats(creds, file_path):
         print("Vehicle Stats Update complete!")
     else:
         print("No matching rows found to update for Vehicle Stats.")
-        
+
 def update_expense_metrics(creds):
-    """Fetches specific expense metrics from Col U, excluding 'Cancelled' rows."""
+    """Fetches specific expense metrics from Col U with DEBUG PRINTS."""
     print(f"\n--- Processing Expense Metrics (Stationery, Repair, etc.) ---")
     gc = gspread.authorize(creds)
     
@@ -1148,9 +1148,9 @@ def update_expense_metrics(creds):
     yesterday = (datetime.now(ist_timezone) - timedelta(days=1)).date()
     start_of_month = yesterday.replace(day=1)
 
-    print(f"Expenses: FTD for {yesterday} and MTD from {start_of_month} to {yesterday}")
+    print(f"DEBUG: Looking for data dated exactly: {yesterday} (FTD)")
+    print(f"DEBUG: Looking for MTD data between: {start_of_month} and {yesterday}")
 
-    # 3. Define Metrics to Track
     target_categories = [
         "Stationery Expenses", 
         "Associate Relations", 
@@ -1158,7 +1158,6 @@ def update_expense_metrics(creds):
         "Repair and Maintenance"
     ]
 
-    # 4. Helper to clean numbers
     def safe_float(val):
         val_str = str(val).replace(',', '').strip()
         if not val_str or val_str in ['-', 'NA', '#DIV/0!', '#N/A']: return 0.0
@@ -1167,54 +1166,54 @@ def update_expense_metrics(creds):
         except ValueError:
             return 0.0
 
-    # 5. Process Data
-    # Store Code = Col D (Index 3)
-    # Date = Col F (Index 5)
-    # Category = Col G (Index 6)
-    # Status = Col B (Index 1) -> Must NOT be "Cancelled"
-    # Value = Col U (Index 20)
-    
     ftd_data = {} 
     mtd_data = {} 
 
-    for row in source_data[1:]: # Skip header
-        
-        # SAFETY FIX: If row is shorter than 21 columns (ending before Col U), pad it with empty strings
+    # 3. Process Data with DEBUGGING
+    for i, row in enumerate(source_data[1:]): 
+        # Pad row if short
         if len(row) <= 20:
             row += [''] * (21 - len(row))
 
         status = str(row[1]).strip().lower()
-        if status == "cancelled": 
-            continue 
+        if status == "cancelled": continue 
 
         try:
-            # Parse Date from Column F (Index 5)
-            # Handling yyyy-mm-dd or mm/dd/yyyy formats automatically
+            # Parse Date (Col F / Index 5)
             row_date = pd.to_datetime(row[5], errors='coerce').date()
             if pd.isna(row_date): continue
         except:
             continue
 
         category = str(row[6]).strip()
-        if category in target_categories:
-            store_code = str(row[3]).strip()
-            
-            # STRICTLY Fetching from Column U (Index 20)
-            val = safe_float(row[20])
+        store_code = str(row[3]).strip()
 
-            # Init store dicts if missing
+        # DEBUG: Print details ONLY for Store 4702 to avoid spamming logs
+        if store_code == "4702" and category in target_categories:
+            val = safe_float(row[20]) # Col U
+            print(f"  -> Found Row: Date={row_date} | Cat={category} | Amt={val}")
+            
+            if row_date == yesterday:
+                print(f"     [MATCH] Adding {val} to FTD (Yesterday)")
+            elif start_of_month <= row_date <= yesterday:
+                print(f"     [MATCH] Adding {val} to MTD (Month Total)")
+            else:
+                print(f"     [SKIP] Date {row_date} is not in range.")
+
+        # Logic Execution
+        if category in target_categories:
+            val = safe_float(row[20])
+            
             if store_code not in ftd_data: ftd_data[store_code] = {}
             if store_code not in mtd_data: mtd_data[store_code] = {}
 
-            # Add to MTD (Month Start -> Yesterday)
             if start_of_month <= row_date <= yesterday:
                 mtd_data[store_code][category] = mtd_data[store_code].get(category, 0) + val
             
-            # Add to FTD (Yesterday Only)
             if row_date == yesterday:
                 ftd_data[store_code][category] = ftd_data[store_code].get(category, 0) + val
 
-    # 6. Update Target Master Sheet
+    # 4. Update Target Master Sheet
     print("Connecting to target Master Sheet...")
     target_sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
     target_ws = gc.open_by_key(target_sheet_id).worksheet('Store_Data') 
@@ -1229,7 +1228,6 @@ def update_expense_metrics(creds):
             cell_type = str(row[1]).strip()
             
             if cell_type in target_categories:
-                
                 ftd_val = ftd_data.get(store_code, {}).get(cell_type, 0)
                 mtd_val = mtd_data.get(store_code, {}).get(cell_type, 0)
                 
@@ -1243,6 +1241,7 @@ def update_expense_metrics(creds):
         print("Expense Metrics Update complete!")
     else:
         print("No matching expense rows found to update.")
+        
 
         
 def main():
