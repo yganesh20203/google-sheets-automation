@@ -891,6 +891,129 @@ def update_sixth_metric(creds):
     else:
         print("No matching rows found to update for '>50 Lines Invoices'.")
 
+
+def update_eighth_metric(creds):
+    """Fetches 'Tonnage attainment' data from merged date headers."""
+    print(f"\n--- Processing Eighth Google Sheet (Tonnage Attainment) ---")
+    gc = gspread.authorize(creds)
+    
+    # 1. Open Source Sheet
+    source_sheet_id = '1U6y-mEgv7WoqdsmqESM3bhZqV-3d0ApgSY5G7MCbvaI'
+    try:
+        # Targeting GID 1747919180 specifically
+        source_ws = gc.open_by_key(source_sheet_id).get_worksheet_by_id(1747919180) 
+        source_data = source_ws.get_all_values()
+    except Exception as e:
+        print(f"Failed to open eighth source sheet. Error: {e}")
+        return
+
+    if len(source_data) < 3:
+        print("Eighth sheet does not have enough rows for data extraction.")
+        return
+
+    # 2. Determine Dates
+    ist_timezone = timezone(timedelta(hours=5, minutes=30))
+    yesterday = (datetime.now(ist_timezone) - timedelta(days=1)).date()
+    start_of_month = yesterday.replace(day=1)
+
+    print(f"Finding FTD for {yesterday} and MTD Average from {start_of_month} to {yesterday}")
+
+    # 3. Dynamically find the Column Indexes in Row 1 (Python Index 0)
+    # Since it's a merged cell, the date is in the first cell. 
+    # The target "Attainment" is the 4th column of the merge (Index + 3).
+    date_row = source_data[0] 
+    ftd_col_idx = -1
+    mtd_col_indices = []
+
+    for idx, cell_val in enumerate(date_row):
+        val_str = str(cell_val).strip()
+        if not val_str: 
+            continue
+            
+        try:
+            parsed_date = pd.to_datetime(val_str).date()
+            
+            # If the date matches, shift +3 indexes to grab the 4th column
+            if parsed_date == yesterday:
+                ftd_col_idx = idx + 3 
+            if start_of_month <= parsed_date <= yesterday:
+                mtd_col_indices.append(idx + 3)
+        except Exception:
+            pass # Ignore cells that aren't valid dates
+
+    if ftd_col_idx == -1 and not mtd_col_indices:
+        print("Could not find valid dates in Row 1 for Tonnage attainment.")
+        return
+
+    # Helper function to safely convert sheet percentages (e.g., "145%") to floats (1.45)
+    def safe_float(val):
+        val_str = str(val).replace(',', '').strip()
+        if not val_str or val_str in ['-', 'NA', '#DIV/0!', '#N/A']: return 0.0
+        is_percent = False
+        if val_str.endswith('%'):
+            val_str = val_str[:-1]
+            is_percent = True
+        try:
+            num = float(val_str)
+            return num / 100.0 if is_percent else num
+        except ValueError:
+            return 0.0
+
+    # 4. Extract Data from Row 3 onwards (Python Index 2+)
+    extracted_data = {}
+    
+    for row in source_data[2:]:
+        if len(row) > 0:
+            store_code = str(row[0]).strip() # Column A
+            
+            if store_code in STORE_MAPPING:
+                
+                # Extract FTD
+                if ftd_col_idx != -1 and ftd_col_idx < len(row):
+                    ftd_val = safe_float(row[ftd_col_idx])
+                else:
+                    ftd_val = 0.0
+                
+                # Extract MTD and calculate AVERAGE (Since attainment is a percentage)
+                if mtd_col_indices:
+                    mtd_vals = [safe_float(row[i]) for i in mtd_col_indices if i < len(row)]
+                    mtd_val = sum(mtd_vals) / len(mtd_vals) if mtd_vals else 0.0
+                else:
+                    mtd_val = 0.0
+                    
+                extracted_data[store_code] = {"FTD": ftd_val, "MTD": mtd_val}
+
+    # 5. Update Target Master Sheet
+    print("Connecting to target Master Sheet...")
+    target_sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
+    target_ws = gc.open_by_key(target_sheet_id).worksheet('Store_Data') 
+    target_data = target_ws.get_all_values()
+    
+    cells_to_update = []
+    current_time = datetime.now(ist_timezone).strftime("%d-%b-%Y %I:%M %p")
+    
+    for index, row in enumerate(target_data):
+        if len(row) >= 2: 
+            store_code = str(row[0]).strip() 
+            cell_type = str(row[1]).strip()
+            
+            # Match strictly against "Tonnage attainment"
+            if cell_type == "Tonnage attainment" and store_code in extracted_data:
+                
+                ftd_val = extracted_data[store_code]["FTD"]
+                mtd_val = extracted_data[store_code]["MTD"]
+                
+                cells_to_update.append(gspread.Cell(row=index+1, col=3, value=ftd_val))
+                cells_to_update.append(gspread.Cell(row=index+1, col=4, value=mtd_val))
+                cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
+                
+    if cells_to_update:
+        print(f"Updating {len(cells_to_update)//3} records for 'Tonnage attainment'...")
+        target_ws.update_cells(cells_to_update)
+        print("Eighth Sheet (Tonnage Attainment) Update complete!")
+    else:
+        print("No matching rows found to update for Tonnage attainment.")
+
         
 def main():
     creds = authenticate_service_account()
@@ -902,6 +1025,7 @@ def main():
     update_fifth_metric(creds)
     update_sixth_metric(creds)
     update_seventh_metric(creds)
+    update_eighth_metric(creds)
     
     # 2. Pull the Sales .xlsb data from Google Drive
     drive_service = build('drive', 'v3', credentials=creds)
