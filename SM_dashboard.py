@@ -1,6 +1,7 @@
 import os
 import io
 import pandas as pd
+import numpy as np
 import gspread
 from datetime import datetime, timedelta, timezone
 from google.oauth2.service_account import Credentials
@@ -13,8 +14,17 @@ SCOPES = [
     'https://www.googleapis.com/auth/spreadsheets'
 ]
 
+STORE_MAPPING = {
+    "4702": "Amritsar", "4703": "Zirakpur", "4706": "Jalandhar", "4712": "Bhopal-1",
+    "4713": "Kota", "4716": "Raipur", "4717": "Ludhiana-1", "4719": "Jammu",
+    "4720": "Meerut", "4721": "Vijayawada", "4723": "Agra-1", "4724": "Aurangabad",
+    "4725": "Guntur", "4727": "Lucknow", "4729": "Indore-1", "4734": "Hyderabad",
+    "4742": "Rajahmundry", "4744": "Amravati", "4760": "Bhopal-2", "4797": "Agra-2",
+    "4799": "Visakhapatnam", "4801": "Ludhiana-3", "4803": "Indore-2", "4805": "Tirupathi",
+    "4813": "Karimnagar", "4814": "Kurnool"
+}
+
 def authenticate_service_account():
-    """Authenticates using a Service Account JSON file for GitHub Actions."""
     print("Authenticating with Service Account...")
     try:
         creds = Credentials.from_service_account_file('credentials.json', scopes=SCOPES)
@@ -322,6 +332,106 @@ def update_third_metric(creds):
     else:
         print("No matching rows found to update for the third sheet.")
 
+def update_fourth_metric(creds):
+    """Fetches FTD and MTD data from specific rows in the fourth Google Sheet using the Global Store Mapping."""
+    print(f"\n--- Processing Fourth Google Sheet (Store Name Mapping) ---")
+    gc = gspread.authorize(creds)
+    
+    # 1. Open Source Sheet
+    source_sheet_id = '14Dpes2Cs2TXVj6bmu8TbKwvHbbekK72fuW9LhjhdyPc'
+    try:
+        # GID 63795866 is targeted specifically
+        source_ws = gc.open_by_key(source_sheet_id).get_worksheet_by_id(63795866) 
+        source_data = source_ws.get_all_values()
+    except Exception as e:
+        print(f"Failed to open fourth source sheet. Error: {e}")
+        return
+
+    # Helper function to safely convert sheet values to numbers
+    def safe_float(val):
+        try:
+            return float(str(val).replace(',', '').strip())
+        except ValueError:
+            return 0.0
+
+    # 2. Extract FTD Data (Rows 33 to 64 -> Python Index 32 to 64)
+    # Mapping: Col C(2), Col D(3), Col J(9), Col K(10)
+    ftd_data = {}
+    for row in source_data[32:64]:
+        if len(row) >= 11: 
+            store_name = str(row[0]).strip()
+            if store_name:
+                ftd_data[store_name] = {
+                    2: safe_float(row[2]),
+                    3: safe_float(row[3]),
+                    9: safe_float(row[9]),
+                    10: safe_float(row[10])
+                }
+
+    # Extract MTD Data (Rows 72 to 102 -> Python Index 71 to 102)
+    # Mapping: Col C(2), Col D(3), Col I(8), Col J(9)
+    mtd_data = {}
+    for row in source_data[71:102]:
+        if len(row) >= 10: 
+            store_name = str(row[0]).strip()
+            if store_name:
+                mtd_data[store_name] = {
+                    2: safe_float(row[2]),
+                    3: safe_float(row[3]),
+                    8: safe_float(row[8]),
+                    9: safe_float(row[9])
+                }
+
+    # ==========================================
+    # 3. MAPPING TO DASHBOARD ROWS
+    # Change "METRIC_NAME_HERE" to the exact names in Column B of your Master Dashboard
+    # ==========================================
+    fourth_sheet_mapping = {
+        "METRIC_C_NAME_HERE":   {"FTD": 2,  "MTD": 2}, # C mapped to C
+        "METRIC_D_NAME_HERE":   {"FTD": 3,  "MTD": 3}, # D mapped to D
+        "METRIC_J_I_NAME_HERE": {"FTD": 9,  "MTD": 8}, # J mapped to I
+        "METRIC_K_J_NAME_HERE": {"FTD": 10, "MTD": 9}  # K mapped to J
+    }
+
+    # 4. Update Target Master Sheet
+    print("Connecting to target Google Sheet...")
+    target_sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
+    target_ws = gc.open_by_key(target_sheet_id).worksheet('Store_Data') 
+    target_data = target_ws.get_all_values()
+    
+    cells_to_update = []
+    ist_timezone = timezone(timedelta(hours=5, minutes=30))
+    current_time = datetime.now(ist_timezone).strftime("%d-%b-%Y %I:%M %p")
+    
+    for index, row in enumerate(target_data):
+        if len(row) >= 2: 
+            store_code = str(row[0]).strip() 
+            cell_type = str(row[1]).strip()
+            
+            # If the metric is mapped AND the store_code exists in our global dictionary
+            if cell_type in fourth_sheet_mapping and store_code in STORE_MAPPING:
+                
+                # Get the translated store name (e.g., "4702" -> "Amritsar")
+                target_store_name = STORE_MAPPING[store_code]
+                
+                ftd_col_idx = fourth_sheet_mapping[cell_type]["FTD"]
+                mtd_col_idx = fourth_sheet_mapping[cell_type]["MTD"]
+                
+                # Pull values using the translated store name. Default to 0 if missing.
+                ftd_val = ftd_data.get(target_store_name, {}).get(ftd_col_idx, 0)
+                mtd_val = mtd_data.get(target_store_name, {}).get(mtd_col_idx, 0)
+                
+                # Queue updates
+                cells_to_update.append(gspread.Cell(row=index+1, col=3, value=ftd_val))
+                cells_to_update.append(gspread.Cell(row=index+1, col=4, value=mtd_val))
+                cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
+                
+    if cells_to_update:
+        print(f"Updating {len(cells_to_update)//3} records for the fourth sheet...")
+        target_ws.update_cells(cells_to_update)
+        print("Fourth Sheet Update complete!")
+    else:
+        print("No matching rows found to update for the fourth sheet.")
 
 def main():
     creds = authenticate_service_account()
@@ -331,6 +441,7 @@ def main():
     
     # --- STEP 2: Process the New T-2 Sheet ---
     update_third_metric(creds)
+    update_fourth_metric(creds)
     
     # --- STEP 3: Process the Sales .xlsb File from Drive ---
     drive_service = build('drive', 'v3', credentials=creds)
