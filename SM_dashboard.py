@@ -274,7 +274,7 @@ def update_third_metric(creds):
     # replace "YOUR_METRIC_NAME_HERE" with the exact name from Column B (e.g., "OFR %")
     # ==========================================
     sheet_metric_mapping = {
-        "YOUR_METRIC_NAME_HERE": 8  # 8 is Column I
+        "OFR - No of Orders Effected": 8  # 8 is Column I
     }
     cols_to_sum = list(sheet_metric_mapping.values())
     
