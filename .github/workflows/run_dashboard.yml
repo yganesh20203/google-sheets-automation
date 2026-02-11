@@ -25,9 +25,10 @@ jobs:
 
       - name: Create Credentials File from Secret
         env:
-          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          # Changed this to match your exact secret name
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }} 
         run: |
-          echo "$GOOGLE_CREDENTIALS" > credentials.json
+          echo "$GCP_SA_KEY" > credentials.json
 
       - name: Run Dashboard Script
         run: python SM_dashboard.py
