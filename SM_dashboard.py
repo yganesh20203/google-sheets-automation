@@ -682,7 +682,6 @@ def calculate_derived_metrics(creds):
     else:
         print("No derived metrics to update.")
 
-
 def update_sixth_metric(creds):
     """Fetches '>50 Lines Invoices' data from a dynamically named tab (yyyy-mm-dd)."""
     print(f"\n--- Processing Sixth Google Sheet (>50 Lines Invoices) ---")
@@ -729,19 +728,21 @@ def update_sixth_metric(creds):
             return 0.0
 
     # 3. Extract FTD and MTD Data
-    # Column C (Index 2) = Store Code
-    # Column E (Index 4) = FTD
-    # Column O (Index 14) = MTD
+    # Column C (Index 2) = Store Code (Site)
+    # Column E (Index 4) = FTD (Order Count)
+    # Column G (Index 6) = MTD (MTD Order Count)  <-- FIXED THIS based on screenshot
     extracted_data = {}
-    for row in source_data:
-        # Ensure the row actually has enough columns to reach Column O
-        if len(row) >= 15: 
+    
+    # Skip the header row (index 0) and loop through the rest
+    for row in source_data[1:]:
+        # We only need the row to be at least 7 columns long to reach Column G
+        if len(row) >= 7: 
             store_code = str(row[2]).strip()
             
             # Check if this is a valid store code from our global mapping
             if store_code in STORE_MAPPING: 
-                ftd_val = safe_float(row[4])
-                mtd_val = safe_float(row[14])
+                ftd_val = safe_float(row[4])  # Column E
+                mtd_val = safe_float(row[6])  # Column G
                 extracted_data[store_code] = {"FTD": ftd_val, "MTD": mtd_val}
 
     if not extracted_data:
