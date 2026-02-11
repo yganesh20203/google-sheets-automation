@@ -1127,6 +1127,119 @@ def process_vehicle_stats(creds, file_path):
     else:
         print("No matching rows found to update for Vehicle Stats.")
 
+def update_expense_metrics(creds):
+    """Fetches specific expense metrics, excluding 'Cancelled' rows."""
+    print(f"\n--- Processing Expense Metrics (Stationery, Repair, etc.) ---")
+    gc = gspread.authorize(creds)
+    
+    # 1. Open Source Sheet
+    source_sheet_id = '1B7sKYLDr0KPA8tCMDUHgYo-fO4yBDnj6K3ubXCC8gfs'
+    try:
+        source_ws = gc.open_by_key(source_sheet_id).sheet1 
+        source_data = source_ws.get_all_values()
+    except Exception as e:
+        print(f"Failed to open expense source sheet. Error: {e}")
+        return
+
+    if len(source_data) < 2: return
+
+    # 2. Determine Dates
+    ist_timezone = timezone(timedelta(hours=5, minutes=30))
+    yesterday = (datetime.now(ist_timezone) - timedelta(days=1)).date()
+    start_of_month = yesterday.replace(day=1)
+
+    print(f"Expenses: FTD for {yesterday} and MTD from {start_of_month} to {yesterday}")
+
+    # 3. Define Metrics to Track
+    # These must match the exact text in Column G of Source Sheet
+    target_categories = [
+        "Stationery Expenses", 
+        "Associate Relations", 
+        "Member Satisfaction & Business Development", 
+        "Repair and Maintenance"
+    ]
+
+    # 4. Helper to clean numbers
+    def safe_float(val):
+        val_str = str(val).replace(',', '').strip()
+        if not val_str or val_str in ['-', 'NA', '#DIV/0!', '#N/A']: return 0.0
+        try:
+            return float(val_str)
+        except ValueError:
+            return 0.0
+
+    # 5. Process Data
+    # Store Code = Col D (Index 3)
+    # Date = Col F (Index 5)
+    # Category = Col G (Index 6)
+    # Status = Col B (Index 1) -> Must NOT be "Cancelled"
+    # Value = Col U (Index 20)
+    
+    ftd_data = {} # Format: {'StoreCode': {'Category': Value}}
+    mtd_data = {} 
+
+    for row in source_data[1:]: # Skip header
+        if len(row) > 20:
+            status = str(row[1]).strip().lower()
+            if status == "cancelled": 
+                continue # Skip cancelled rows
+
+            try:
+                # Parse Date (yyyy-mm-dd)
+                row_date = pd.to_datetime(row[5], errors='coerce').date()
+                if pd.isna(row_date): continue
+            except:
+                continue
+
+            category = str(row[6]).strip()
+            if category in target_categories:
+                store_code = str(row[3]).strip()
+                val = safe_float(row[20])
+
+                # Init store dicts if missing
+                if store_code not in ftd_data: ftd_data[store_code] = {}
+                if store_code not in mtd_data: mtd_data[store_code] = {}
+
+                # Add to MTD (Month Start -> Yesterday)
+                if start_of_month <= row_date <= yesterday:
+                    mtd_data[store_code][category] = mtd_data[store_code].get(category, 0) + val
+                
+                # Add to FTD (Yesterday Only)
+                if row_date == yesterday:
+                    ftd_data[store_code][category] = ftd_data[store_code].get(category, 0) + val
+
+    # 6. Update Target Master Sheet
+    print("Connecting to target Master Sheet...")
+    target_sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
+    target_ws = gc.open_by_key(target_sheet_id).worksheet('Store_Data') 
+    target_data = target_ws.get_all_values()
+    
+    cells_to_update = []
+    current_time = datetime.now(ist_timezone).strftime("%d-%b-%Y %I:%M %p")
+    
+    for index, row in enumerate(target_data):
+        if len(row) >= 2: 
+            store_code = str(row[0]).strip() 
+            cell_type = str(row[1]).strip()
+            
+            # Check if this row is one of our expense categories
+            if cell_type in target_categories:
+                
+                ftd_val = ftd_data.get(store_code, {}).get(cell_type, 0)
+                mtd_val = mtd_data.get(store_code, {}).get(cell_type, 0)
+                
+                # Queue updates
+                cells_to_update.append(gspread.Cell(row=index+1, col=3, value=ftd_val))
+                cells_to_update.append(gspread.Cell(row=index+1, col=4, value=mtd_val))
+                cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
+                
+    if cells_to_update:
+        print(f"Updating {len(cells_to_update)//3} expense records...")
+        target_ws.update_cells(cells_to_update)
+        print("Expense Metrics Update complete!")
+    else:
+        print("No matching expense rows found to update.")
+
         
 def main():
     creds = authenticate_service_account()
@@ -1140,6 +1253,7 @@ def main():
     update_sixth_metric(creds)
     update_seventh_metric(creds)
     update_eighth_metric(creds)
+    update_expense_metrics(creds)
     
     # 2. Process Vehicle Stats (.XLSX) - NEW STEP
     # Reuse the download function but pass the specific filename
