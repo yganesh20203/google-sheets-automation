@@ -2,32 +2,25 @@ import os
 import io
 import pandas as pd
 import gspread
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
-# Scopes for Drive (to download the .xlsb) and Sheets (to update the target sheet)
+# Scopes for Drive (downloading .xlsb) and Sheets (updating the dashboard)
 SCOPES = [
     'https://www.googleapis.com/auth/drive.readonly',
     'https://www.googleapis.com/auth/spreadsheets'
 ]
 
-def authenticate_google_apis():
-    """Handles OAuth 2.0 authentication."""
-    creds = None
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
-    return creds
+def authenticate_service_account():
+    """Authenticates using a Service Account JSON file for GitHub Actions."""
+    print("Authenticating with Service Account...")
+    try:
+        creds = Credentials.from_service_account_file('credentials.json', scopes=SCOPES)
+        return creds
+    except Exception as e:
+        print(f"Authentication failed. Check your credentials.json file. Error: {e}")
+        raise
 
 def download_from_drive(drive_service, filename='Daily_KPI_Processing.xlsb'):
     """Finds and downloads the file from Google Drive."""
@@ -39,7 +32,7 @@ def download_from_drive(drive_service, filename='Daily_KPI_Processing.xlsb'):
     
     items = results.get('files', [])
     if not items:
-        print("No file found. Make sure the Apps Script ran successfully.")
+        print("No file found in Drive. Ensure the Apps Script ran successfully.")
         return None
         
     file_id = items[0]['id']
@@ -94,7 +87,7 @@ def process_and_update_sheet(creds, xlsb_path):
         print("No matching rows found to update.")
 
 def main():
-    creds = authenticate_google_apis()
+    creds = authenticate_service_account()
     drive_service = build('drive', 'v3', credentials=creds)
     
     # 1. Pull the file from Google Drive
