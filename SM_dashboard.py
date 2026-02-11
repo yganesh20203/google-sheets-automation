@@ -226,13 +226,113 @@ def update_damage_metric(creds):
     else:
         print("No matching rows found to update for secondary sheet.")
 
+
+def update_third_metric(creds):
+    """Fetches T-2 data from the third Google Sheet, calculates FTD and MTD."""
+    print(f"\n--- Processing Third Google Sheet (T-2 Data) ---")
+    gc = gspread.authorize(creds)
+    
+    # 1. Open Source Sheet
+    source_sheet_id = '1Zg01KzKUefdKvONNmed7PRL7WU95BpAuvouo-nKk1kw'
+    try:
+        source_ws = gc.open_by_key(source_sheet_id).sheet1 
+        source_data = source_ws.get_all_values()
+    except Exception as e:
+        print(f"Failed to open third source sheet. Error: {e}")
+        return
+        
+    df_source = pd.DataFrame(source_data)
+    if df_source.empty or len(df_source.columns) < 9: # Needs at least up to Column I (index 8)
+        print("Third source sheet is empty or doesn't have enough columns.")
+        return
+        
+    # 2. Determine Dates (T-2 and Start of Month)
+    ist_timezone = timezone(timedelta(hours=5, minutes=30))
+    today = datetime.now(ist_timezone).date()
+    
+    # FTD target is Today - 2 days
+    target_date = today - timedelta(days=2)
+    # MTD start is the 1st of the month that the target_date belongs to
+    start_of_month = target_date.replace(day=1) 
+    
+    print(f"Calculating FTD for {target_date} and MTD from {start_of_month} to {target_date}")
+    
+    # Parse Date Column D (Index 3). Format is mm-dd-yyyy
+    df_source[3] = pd.to_datetime(df_source[3], errors='coerce').dt.normalize()
+    
+    # Filter DataFrames for FTD and MTD
+    df_ftd = df_source[df_source[3].dt.date == target_date].copy()
+    df_mtd = df_source[(df_source[3].dt.date >= start_of_month) & (df_source[3].dt.date <= target_date)].copy()
+    
+    if df_mtd.empty:
+        print("No MTD data found for this period.")
+        return
+        
+    # ==========================================
+    # 3. CREATE YOUR MAPPING DICTIONARY
+    # Because you didn't mention WHICH row this updates in the Master Sheet,
+    # replace "YOUR_METRIC_NAME_HERE" with the exact name from Column B (e.g., "OFR %")
+    # ==========================================
+    sheet_metric_mapping = {
+        "YOUR_METRIC_NAME_HERE": 8  # 8 is Column I
+    }
+    cols_to_sum = list(sheet_metric_mapping.values())
+    
+    # Clean Store Code (Col B / Index 1) and mapped metrics
+    for df in [df_ftd, df_mtd]:
+        if not df.empty:
+            df[1] = df[1].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+            for col_idx in cols_to_sum:
+                if col_idx in df.columns: 
+                    df[col_idx] = pd.to_numeric(df[col_idx], errors='coerce').fillna(0)
+    
+    # Group by Store Code and sum
+    grouped_ftd = df_ftd.groupby(1)[cols_to_sum].sum().to_dict('index') if not df_ftd.empty else {}
+    grouped_mtd = df_mtd.groupby(1)[cols_to_sum].sum().to_dict('index') if not df_mtd.empty else {}
+    
+    # 4. Update Target Master Sheet
+    print("Connecting to target Google Sheet...")
+    target_sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
+    target_ws = gc.open_by_key(target_sheet_id).worksheet('Store_Data') 
+    target_data = target_ws.get_all_values()
+    
+    cells_to_update = []
+    current_time = datetime.now(ist_timezone).strftime("%d-%b-%Y %I:%M %p")
+    
+    for index, row in enumerate(target_data):
+        if len(row) >= 2: 
+            store_code = str(row[0]).strip() 
+            cell_type = str(row[1]).strip()
+            
+            if cell_type in sheet_metric_mapping and store_code in grouped_mtd:
+                col_index = sheet_metric_mapping[cell_type]
+                
+                ftd_val = grouped_ftd.get(store_code, {}).get(col_index, 0)
+                mtd_val = grouped_mtd.get(store_code, {}).get(col_index, 0)
+                
+                # Update FTD (Col C), MTD (Col D), and Last_Updated (Col E)
+                cells_to_update.append(gspread.Cell(row=index+1, col=3, value=ftd_val))
+                cells_to_update.append(gspread.Cell(row=index+1, col=4, value=mtd_val))
+                cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
+                
+    if cells_to_update:
+        print(f"Updating {len(cells_to_update)//3} records for the third sheet...")
+        target_ws.update_cells(cells_to_update)
+        print("Third Sheet Update complete!")
+    else:
+        print("No matching rows found to update for the third sheet.")
+
+
 def main():
     creds = authenticate_service_account()
     
-    # --- STEP 1: Process the Damage Sheet ---
+    # --- STEP 1: Process the Damage Sheet (T-1) ---
     update_damage_metric(creds)
     
-    # --- STEP 2: Process the Sales .xlsb File from Drive ---
+    # --- STEP 2: Process the New T-2 Sheet ---
+    update_third_metric(creds)
+    
+    # --- STEP 3: Process the Sales .xlsb File from Drive ---
     drive_service = build('drive', 'v3', credentials=creds)
     file_path = download_from_drive(drive_service)
     
