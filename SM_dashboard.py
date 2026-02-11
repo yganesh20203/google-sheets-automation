@@ -682,6 +682,116 @@ def calculate_derived_metrics(creds):
     else:
         print("No derived metrics to update.")
 
+def update_seventh_metric(creds):
+    """Fetches 'Tonnage Plan' and 'Order Plan' data, matching dates like '1-Feb'."""
+    print(f"\n--- Processing Seventh Google Sheet (Tonnage & Order Plans) ---")
+    gc = gspread.authorize(creds)
+    
+    source_sheet_id = '1dgmZmhcmJrSd2QzjyzGtk37w3dgHs2-qm_2FnsXwaoY'
+    
+    # Configuration for the two tabs
+    # Format: {"Exact Dashboard Metric Name": Worksheet_GID}
+    metric_configs = {
+        "Tonnage Plan": 292200791,
+        "Order Plan": 53822165
+    }
+
+    # Reverse our global STORE_MAPPING so we can look up "Amritsar" and get "4702"
+    REVERSE_STORE_MAPPING = {v.lower().strip(): k for k, v in STORE_MAPPING.items()}
+
+    # Determine Dates
+    ist_timezone = timezone(timedelta(hours=5, minutes=30))
+    yesterday = (datetime.now(ist_timezone) - timedelta(days=1)).date()
+    start_of_month = yesterday.replace(day=1)
+    current_year = yesterday.year
+
+    print(f"Finding FTD for {yesterday} and MTD Sum from {start_of_month} to {yesterday}")
+
+    # Connect to Target Dashboard
+    target_sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
+    target_ws = gc.open_by_key(target_sheet_id).worksheet('Store_Data') 
+    target_data = target_ws.get_all_values()
+    
+    cells_to_update = []
+    current_time = datetime.now(ist_timezone).strftime("%d-%b-%Y %I:%M %p")
+
+    def safe_float(val):
+        val_str = str(val).replace(',', '').strip()
+        if not val_str or val_str in ['-', 'NA', '#DIV/0!', '#N/A']: return 0.0
+        try:
+            return float(val_str)
+        except ValueError:
+            return 0.0
+
+    # Process each tab one by one
+    for metric_name, gid in metric_configs.items():
+        print(f"Processing tab for: {metric_name}...")
+        try:
+            source_ws = gc.open_by_key(source_sheet_id).get_worksheet_by_id(gid) 
+            source_data = source_ws.get_all_values()
+        except Exception as e:
+            print(f"Failed to open {metric_name} sheet. Error: {e}")
+            continue
+
+        if len(source_data) < 3: continue
+
+        # Dynamically find the Date Column Indexes in Row 2 (Python Index 1)
+        date_row = source_data[1] 
+        ftd_col_idx = -1
+        mtd_col_indices = []
+
+        for idx, cell_val in enumerate(date_row):
+            val_str = str(cell_val).strip()
+            if not val_str: continue
+            
+            try:
+                # Format "1-Feb" into "1-Feb-2026" so Pandas parses it accurately
+                if str(current_year) not in val_str:
+                    val_str = f"{val_str}-{current_year}"
+                    
+                parsed_date = pd.to_datetime(val_str).date()
+                
+                if parsed_date == yesterday:
+                    ftd_col_idx = idx
+                if start_of_month <= parsed_date <= yesterday:
+                    mtd_col_indices.append(idx)
+            except Exception:
+                pass 
+
+        if ftd_col_idx == -1 and not mtd_col_indices:
+            print(f"Could not find valid dates for {metric_name}.")
+            continue
+
+        # Extract Data from Row 3 onwards (Python Index 2+)
+        for row in source_data[2:]:
+            if len(row) > 0:
+                store_name = str(row[0]).strip().lower() # Store name is in Column A
+                
+                # Check if this name exists in our reverse mapping dict
+                if store_name in REVERSE_STORE_MAPPING:
+                    store_code = REVERSE_STORE_MAPPING[store_name]
+                    
+                    ftd_val = safe_float(row[ftd_col_idx]) if ftd_col_idx != -1 and ftd_col_idx < len(row) else 0.0
+                    
+                    # Sum all the days up to yesterday for MTD
+                    mtd_vals = [safe_float(row[i]) for i in mtd_col_indices if i < len(row)]
+                    mtd_val = sum(mtd_vals)
+                    
+                    # Queue the update by matching store code and metric name in Master Sheet
+                    for t_idx, t_row in enumerate(target_data):
+                        if len(t_row) >= 2:
+                            if str(t_row[0]).strip() == store_code and str(t_row[1]).strip() == metric_name:
+                                cells_to_update.append(gspread.Cell(row=t_idx+1, col=3, value=ftd_val))
+                                cells_to_update.append(gspread.Cell(row=t_idx+1, col=4, value=mtd_val))
+                                cells_to_update.append(gspread.Cell(row=t_idx+1, col=5, value=current_time))
+
+    if cells_to_update:
+        print(f"Updating {len(cells_to_update)//3} records for Tonnage & Order Plans...")
+        target_ws.update_cells(cells_to_update)
+        print("Seventh Sheet Update complete!")
+    else:
+        print("No matching rows found to update for Tonnage & Order Plans.")
+        
 def update_sixth_metric(creds):
     """Fetches '>50 Lines Invoices' data from a dynamically named tab (yyyy-mm-dd)."""
     print(f"\n--- Processing Sixth Google Sheet (>50 Lines Invoices) ---")
@@ -791,6 +901,7 @@ def main():
     update_fourth_metric(creds)
     update_fifth_metric(creds)
     update_sixth_metric(creds)
+    update_seventh_metric(creds)
     
     # 2. Pull the Sales .xlsb data from Google Drive
     drive_service = build('drive', 'v3', credentials=creds)
