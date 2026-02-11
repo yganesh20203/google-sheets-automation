@@ -2,6 +2,7 @@ import os
 import io
 import pandas as pd
 import gspread
+from datetime import datetime, timedelta, timezone
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
@@ -55,7 +56,7 @@ def process_and_update_sheet(creds, xlsb_path):
     # Read using pyxlsb. header=None to use integer index
     df = pd.read_excel(xlsb_path, sheet_name='Store Wise Raw Working', engine='pyxlsb', header=None)
     
-    # FIX: Force Store Code (Index 3) to string, remove any '.0' if read as float, and strip spaces
+    # Force Store Code (Index 3) to string, remove any '.0', and strip spaces
     df[3] = df[3].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
     
     # Col I is index 8. Force Col 8 to numeric, handle errors, fill NaNs.
@@ -72,16 +73,25 @@ def process_and_update_sheet(creds, xlsb_path):
     target_data = worksheet.get_all_values()
     cells_to_update = []
     
+    # Create the IST Timezone and format the current date/time
+    ist_timezone = timezone(timedelta(hours=5, minutes=30))
+    current_time = datetime.now(ist_timezone).strftime("%d-%b-%Y %I:%M %p") # e.g., 11-Feb-2026 04:15 PM
+    
     for index, row in enumerate(target_data):
         if len(row) >= 2: 
-            # FIX: Ensure Google Sheet data is also cleanly treated as a string without trailing spaces
+            # Cleanly treat Google Sheet data as a string without trailing spaces
             store_code = str(row[0]).strip() 
             cell_type = str(row[1]).strip()
             
             if store_code in grouped_data and cell_type == "Sales Tgt":
-                # gspread is 1-indexed. row=index+1, col=3 (Column C is FTD_Value)
+                # new_val = summed value from the grouped data
                 new_val = grouped_data[store_code]
+                
+                # Update Column C (col=3): FTD_Value
                 cells_to_update.append(gspread.Cell(row=index+1, col=3, value=new_val))
+                
+                # Update Column E (col=5): Last_Updated
+                cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
                 
     if cells_to_update:
         print(f"Updating {len(cells_to_update)} records in Google Sheets...")
