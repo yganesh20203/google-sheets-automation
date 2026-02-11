@@ -1128,7 +1128,7 @@ def process_vehicle_stats(creds, file_path):
         print("No matching rows found to update for Vehicle Stats.")
 
 def update_expense_metrics(creds):
-    """Fetches specific expense metrics from Col U with DEBUG PRINTS."""
+    """Fetches specific expense metrics from Col U with AGGRESSIVE DEBUGGING."""
     print(f"\n--- Processing Expense Metrics (Stationery, Repair, etc.) ---")
     gc = gspread.authorize(creds)
     
@@ -1148,8 +1148,7 @@ def update_expense_metrics(creds):
     yesterday = (datetime.now(ist_timezone) - timedelta(days=1)).date()
     start_of_month = yesterday.replace(day=1)
 
-    print(f"DEBUG: Looking for data dated exactly: {yesterday} (FTD)")
-    print(f"DEBUG: Looking for MTD data between: {start_of_month} and {yesterday}")
+    print(f"DEBUG: Targets -> FTD: {yesterday} | MTD Start: {start_of_month}")
 
     target_categories = [
         "Stationery Expenses", 
@@ -1169,7 +1168,7 @@ def update_expense_metrics(creds):
     ftd_data = {} 
     mtd_data = {} 
 
-    # 3. Process Data with DEBUGGING
+    # 3. Process Data with AGGRESSIVE DEBUGGING
     for i, row in enumerate(source_data[1:]): 
         # Pad row if short
         if len(row) <= 20:
@@ -1178,31 +1177,34 @@ def update_expense_metrics(creds):
         status = str(row[1]).strip().lower()
         if status == "cancelled": continue 
 
+        # FIX: Clean Store Code to remove ".0" (e.g., "4702.0" -> "4702")
+        store_code = str(row[3]).replace('.0', '').strip()
+        category = str(row[6]).strip()
+
+        # --- DEBUG BLOCK ---
+        # We print ANY row for Store 4702 to see what the script actually sees
+        if store_code == "4702":
+            try:
+                row_date = pd.to_datetime(row[5], errors='coerce').date()
+                amt = row[20] # Column U
+                
+                # Check if category matches
+                cat_match = "YES" if category in target_categories else f"NO (Saw: '{category}')"
+                
+                print(f"  [Row {i+2}] Date: {row_date} | Cat Match: {cat_match} | Amt (Col U): {amt}")
+                
+            except Exception as e:
+                print(f"  [Row {i+2}] Error reading row: {e}")
+        # -------------------
+
         try:
-            # Parse Date (Col F / Index 5)
             row_date = pd.to_datetime(row[5], errors='coerce').date()
             if pd.isna(row_date): continue
         except:
             continue
 
-        category = str(row[6]).strip()
-        store_code = str(row[3]).strip()
-
-        # DEBUG: Print details ONLY for Store 4702 to avoid spamming logs
-        if store_code == "4702" and category in target_categories:
-            val = safe_float(row[20]) # Col U
-            print(f"  -> Found Row: Date={row_date} | Cat={category} | Amt={val}")
-            
-            if row_date == yesterday:
-                print(f"     [MATCH] Adding {val} to FTD (Yesterday)")
-            elif start_of_month <= row_date <= yesterday:
-                print(f"     [MATCH] Adding {val} to MTD (Month Total)")
-            else:
-                print(f"     [SKIP] Date {row_date} is not in range.")
-
-        # Logic Execution
         if category in target_categories:
-            val = safe_float(row[20])
+            val = safe_float(row[20]) # Strictly Column U
             
             if store_code not in ftd_data: ftd_data[store_code] = {}
             if store_code not in mtd_data: mtd_data[store_code] = {}
