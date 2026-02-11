@@ -1,12 +1,9 @@
 name: Daily SM Dashboard Update
 
-# This schedule runs it every day. 
-# Adjust the cron time (it uses UTC time). 
-# Right now, this is set to run at 02:00 UTC (which is 7:30 AM IST)
 on:
   schedule:
     - cron: '0 2 * * *'
-  workflow_dispatch: # This allows you to click a button to run it manually!
+  workflow_dispatch:
 
 jobs:
   update-dashboard:
@@ -19,7 +16,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10' # Or whichever version you are using
+          python-version: '3.11' # Upgraded to fix the deprecation warning
 
       - name: Install Dependencies
         run: |
