@@ -1014,10 +1014,124 @@ def update_eighth_metric(creds):
     else:
         print("No matching rows found to update for Tonnage attainment.")
 
+
+def process_vehicle_stats(creds, file_path):
+    """Reads vehicle_stats.XLSX, filters invalid times, and calculates 4 key metrics."""
+    print(f"\n--- Processing Vehicle Stats (.XLSX) ---")
+    
+    # Read the Excel file
+    try:
+        df = pd.read_excel(file_path, header=None)
+    except Exception as e:
+        print(f"Failed to read vehicle stats file. Error: {e}")
+        return
+
+    # 1. Column Mapping (0-based index)
+    # B=1 (Store), E=4 (Date), G=6 (Vendor), N=13 (Type), P=15 (Time), Q=16 (Cases)
+    
+    # 2. Clean Store Code
+    df[1] = df[1].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+    
+    # 3. Parse Date (Column E / Index 4) - Format is mm/dd/yyyy
+    df[4] = pd.to_datetime(df[4], format='%m/%d/%Y', errors='coerce').dt.normalize()
+    
+    # 4. Filter Out Invalid Times (Column P / Index 15)
+    # We remove rows where Time is "12:00:00 AM" or empty
+    def is_valid_time(val):
+        s = str(val).strip().upper()
+        return s != "12:00:00 AM" and s != "00:00:00" and s != "NAN"
+    
+    df = df[df[15].apply(is_valid_time)].copy()
+    
+    # 5. Define Dates (Yesterday & MTD)
+    ist_timezone = timezone(timedelta(hours=5, minutes=30))
+    yesterday = (datetime.now(ist_timezone) - timedelta(days=1)).date()
+    start_of_month = yesterday.replace(day=1)
+    
+    print(f"Vehicle Stats: Filtering for FTD ({yesterday}) and MTD ({start_of_month} to {yesterday})")
+    
+    # 6. Filter DataFrames for FTD and MTD
+    df_ftd = df[df[4].dt.date == yesterday].copy()
+    df_mtd = df[(df[4].dt.date >= start_of_month) & (df[4].dt.date <= yesterday)].copy()
+    
+    if df_mtd.empty:
+        print("No valid vehicle data found for this period.")
+        return
+
+    # Helper to calculate metrics for a specific DataFrame
+    def calc_metrics(subset_df):
+        if subset_df.empty: return {}
+        
+        # Metric 1: #Of Vehicle Received (Count of rows)
+        vehicle_count = subset_df.groupby(1).size().to_dict()
+        
+        # Metric 2: #Of Cases (Sum of Column Q / Index 16)
+        subset_df[16] = pd.to_numeric(subset_df[16], errors='coerce').fillna(0)
+        cases_sum = subset_df.groupby(1)[16].sum().to_dict()
+        
+        # Metric 3: #Of couriers (Count where Col N / Index 13 == 'Courier')
+        # Normalize text to handle "Courier", "courier ", etc.
+        courier_df = subset_df[subset_df[13].astype(str).str.strip().str.title() == "Courier"]
+        courier_count = courier_df.groupby(1).size().to_dict()
+        
+        # Metric 4: #Of HUL Vehicle (Count where Col G / Index 6 in HUL list)
+        hul_vendors = ["HINDUSTAN UNILEVER LIMITED 01", "HINDUSTAN UNILEVER LIMITED 02"]
+        # Normalize text to handle formatting issues
+        hul_df = subset_df[subset_df[6].astype(str).str.strip().isin(hul_vendors)]
+        hul_count = hul_df.groupby(1).size().to_dict()
+        
+        return {
+            "#Of Vehicle Received": vehicle_count,
+            "#Of Cases": cases_sum,
+            "#Of couriers": courier_count,
+            "#Of HUL Vehicle": hul_count
+        }
+
+    # Calculate metrics for both time periods
+    ftd_metrics = calc_metrics(df_ftd)
+    mtd_metrics = calc_metrics(df_mtd)
+    
+    # 7. Update Master Sheet
+    print("Connecting to target Master Sheet...")
+    gc = gspread.authorize(creds)
+    target_sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
+    target_ws = gc.open_by_key(target_sheet_id).worksheet('Store_Data') 
+    target_data = target_ws.get_all_values()
+    
+    cells_to_update = []
+    current_time = datetime.now(ist_timezone).strftime("%d-%b-%Y %I:%M %p")
+    
+    metrics_list = ["#Of Vehicle Received", "#Of Cases", "#Of couriers", "#Of HUL Vehicle"]
+    
+    for index, row in enumerate(target_data):
+        if len(row) >= 2:
+            store_code = str(row[0]).strip()
+            cell_type = str(row[1]).strip()
+            
+            if cell_type in metrics_list:
+                # Get FTD Value (Default to 0)
+                ftd_val = ftd_metrics.get(cell_type, {}).get(store_code, 0)
+                
+                # Get MTD Value (Default to 0)
+                mtd_val = mtd_metrics.get(cell_type, {}).get(store_code, 0)
+                
+                # Queue Update
+                cells_to_update.append(gspread.Cell(row=index+1, col=3, value=ftd_val))
+                cells_to_update.append(gspread.Cell(row=index+1, col=4, value=mtd_val))
+                cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
+
+    if cells_to_update:
+        print(f"Updating {len(cells_to_update)//3} records for Vehicle Stats...")
+        target_ws.update_cells(cells_to_update)
+        print("Vehicle Stats Update complete!")
+    else:
+        print("No matching rows found to update for Vehicle Stats.")
+
         
 def main():
     creds = authenticate_service_account()
-    
+    drive_service = build('drive', 'v3', credentials=creds)
+
     # 1. Pull data from all secondary APIs
     update_damage_metric(creds)
     update_third_metric(creds)
@@ -1027,18 +1141,27 @@ def main():
     update_seventh_metric(creds)
     update_eighth_metric(creds)
     
-    # 2. Pull the Sales .xlsb data from Google Drive
-    drive_service = build('drive', 'v3', credentials=creds)
-    file_path = download_from_drive(drive_service)
-    
-    if file_path:
+    # 2. Process Vehicle Stats (.XLSX) - NEW STEP
+    # Reuse the download function but pass the specific filename
+    vehicle_file = download_from_drive(drive_service, filename='vehicle_stats.XLSX')
+    if vehicle_file:
         try:
-            process_and_update_sheet(creds, file_path)
+            process_vehicle_stats(creds, vehicle_file)
         finally:
-            if os.path.exists(file_path):
-                os.remove(file_path)
+            if os.path.exists(vehicle_file):
+                os.remove(vehicle_file)
+
+    # 3. Process Sales KPI (.xlsb)
+    # Note: Using default filename 'Daily_KPI_Processing.xlsb'
+    kpi_file = download_from_drive(drive_service) 
+    if kpi_file:
+        try:
+            process_and_update_sheet(creds, kpi_file)
+        finally:
+            if os.path.exists(kpi_file):
+                os.remove(kpi_file)
                 
-    # 3. CALCULATE ALL DERIVED METRICS LAST!
+    # 4. CALCULATE ALL DERIVED METRICS LAST!
     calculate_derived_metrics(creds)
 
 if __name__ == '__main__':
