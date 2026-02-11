@@ -387,10 +387,11 @@ def update_fourth_metric(creds):
     # Change "METRIC_NAME_HERE" to the exact names in Column B of your Master Dashboard
     # ==========================================
     fourth_sheet_mapping = {
-        "METRIC_C_NAME_HERE":   {"FTD": 2,  "MTD": 2}, # C mapped to C
-        "METRIC_D_NAME_HERE":   {"FTD": 3,  "MTD": 3}, # D mapped to D
-        "METRIC_J_I_NAME_HERE": {"FTD": 9,  "MTD": 8}, # J mapped to I
-        "METRIC_K_J_NAME_HERE": {"FTD": 10, "MTD": 9}  # K mapped to J
+        "Canc%":   {"FTD": 2,  "MTD": 2}, # C mapped to C
+        "RTO%":   {"FTD": 3,  "MTD": 3}, # D mapped to D
+        "D1": {"FTD": 9,  "MTD": 8}, # J mapped to I
+        "D2": {"FTD": 10, "MTD": 9},
+        "OFR %": {"FTD": 12, "MTD": 11}# K mapped to J
     }
 
     # 4. Update Target Master Sheet
