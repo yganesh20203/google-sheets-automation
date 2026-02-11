@@ -59,7 +59,7 @@ def process_and_update_sheet(creds, xlsb_path):
     # 1. Force Store Code (Index 3 / Col D) to string
     df[3] = df[3].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
     
-    # 2. CREATE A MAPPING DICTIONARY (Add more metrics here as needed!)
+    # 2. CREATE A MAPPING DICTIONARY 
     metric_mapping = {
         "Sales Tgt": 8,       # Column I
         "Sales Ach": 15,      # Column P
@@ -80,7 +80,7 @@ def process_and_update_sheet(creds, xlsb_path):
     # 4. Group by Store Code and sum ALL target columns simultaneously
     grouped_data = df.groupby(3)[cols_to_sum].sum().to_dict('index')
     
-    print("Connecting to target Google Sheet...")
+    print("Connecting to target Google Sheet for Sales KPIs...")
     gc = gspread.authorize(creds)
     sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
     worksheet = gc.open_by_key(sheet_id).worksheet('Store_Data') 
@@ -109,7 +109,7 @@ def process_and_update_sheet(creds, xlsb_path):
         worksheet.update_cells(cells_to_update)
         print("Sales KPI Update complete!")
     else:
-        print("No matching rows found to update.")
+        print("No matching rows found to update for Sales KPIs.")
 
 def update_damage_metric(creds):
     """Fetches Damage data from a separate Google Sheet and updates DT(Damage)."""
@@ -127,14 +127,13 @@ def update_damage_metric(creds):
         
     df_source = pd.DataFrame(source_data)
     
-    # Skip if empty
     if df_source.empty or len(df_source.columns) < 5:
         print("Damage source sheet is empty or doesn't have enough columns (A to E).")
         return
         
     # 2. Filter for Yesterday's Date in Column A (Index 0)
-    # We force Column A into datetime objects so Python perfectly matches it regardless of formatting
-    df_source[0] = pd.to_datetime(df_source[0], errors='coerce', dayfirst=True)
+    # FIX: Parse as mm/dd/yyyy natively, and normalize() removes any hidden timestamps
+    df_source[0] = pd.to_datetime(df_source[0], errors='coerce').dt.normalize()
     
     ist_timezone = timezone(timedelta(hours=5, minutes=30))
     yesterday = (datetime.now(ist_timezone) - timedelta(days=1)).date()
@@ -143,14 +142,14 @@ def update_damage_metric(creds):
     df_filtered = df_source[df_source[0].dt.date == yesterday].copy()
     
     if df_filtered.empty:
-        print(f"No damage data found for yesterday ({yesterday.strftime('%d-%b-%Y')}).")
+        print(f"No damage data found for yesterday ({yesterday.strftime('%m/%d/%Y')}).")
         return
         
     # 3. Clean Store Code (Col B / Index 1) and Values (Col E / Index 4)
     df_filtered[1] = df_filtered[1].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
     df_filtered[4] = pd.to_numeric(df_filtered[4], errors='coerce').fillna(0)
     
-    # Group by Store Code and sum the damage values (in case of multiple entries per store)
+    # Group by Store Code and sum the damage values
     damage_data = df_filtered.groupby(1)[4].sum().to_dict()
     
     # 4. Update Target Master Sheet
