@@ -33,4 +33,4 @@ jobs:
           echo "$GOOGLE_CREDENTIALS" > credentials.json
 
       - name: Run Dashboard Script
-        run: python SM_Dashboard.pyrun_dashboard.yml
+        run: python SM_Dashboard.py
