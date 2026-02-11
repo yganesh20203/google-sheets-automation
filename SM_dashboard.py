@@ -55,7 +55,10 @@ def process_and_update_sheet(creds, xlsb_path):
     # Read using pyxlsb. header=None to use integer index
     df = pd.read_excel(xlsb_path, sheet_name='Store Wise Raw Working', engine='pyxlsb', header=None)
     
-    # Col D is index 3, Col I is index 8. Force Col 8 to numeric, handle errors, fill NaNs.
+    # FIX: Force Store Code (Index 3) to string, remove any '.0' if read as float, and strip spaces
+    df[3] = df[3].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+    
+    # Col I is index 8. Force Col 8 to numeric, handle errors, fill NaNs.
     df[8] = pd.to_numeric(df[8], errors='coerce').fillna(0)
     
     # Group by Store Code and sum the values
@@ -64,8 +67,6 @@ def process_and_update_sheet(creds, xlsb_path):
     print("Connecting to target Google Sheet...")
     gc = gspread.authorize(creds)
     sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
-    
-    # UPDATED: Pointing specifically to the "Store_Data" tab
     worksheet = gc.open_by_key(sheet_id).worksheet('Store_Data') 
     
     target_data = worksheet.get_all_values()
@@ -73,11 +74,12 @@ def process_and_update_sheet(creds, xlsb_path):
     
     for index, row in enumerate(target_data):
         if len(row) >= 2: 
-            store_code = row[0] # Column A
-            cell_type = row[1]  # Column B
+            # FIX: Ensure Google Sheet data is also cleanly treated as a string without trailing spaces
+            store_code = str(row[0]).strip() 
+            cell_type = str(row[1]).strip()
             
             if store_code in grouped_data and cell_type == "Sales Tgt":
-                # gspread is 1-indexed. row=index+1, col=3 (Column C)
+                # gspread is 1-indexed. row=index+1, col=3 (Column C is FTD_Value)
                 new_val = grouped_data[store_code]
                 cells_to_update.append(gspread.Cell(row=index+1, col=3, value=new_val))
                 
@@ -86,7 +88,7 @@ def process_and_update_sheet(creds, xlsb_path):
         worksheet.update_cells(cells_to_update)
         print("Update complete!")
     else:
-        print("No matching rows found to update.")
+        print("No matching rows found to update. (Check your store codes for mismatches)")
 
 def main():
     creds = authenticate_service_account()
