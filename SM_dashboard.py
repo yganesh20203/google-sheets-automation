@@ -52,28 +52,37 @@ def download_from_drive(drive_service, filename='Daily_KPI_Processing.xlsb'):
     return file_path
 
 def process_and_update_sheet(creds, xlsb_path):
-    """Processes the .xlsb and updates the Master Google Sheet."""
+    """Processes the .xlsb and updates both FTD and MTD in the Master Google Sheet."""
     print("Reading .xlsb data...")
     df = pd.read_excel(xlsb_path, sheet_name='Store Wise Raw Working', engine='pyxlsb', header=None)
     
     # 1. Force Store Code (Index 3 / Col D) to string
     df[3] = df[3].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
     
-    # 2. CREATE A MAPPING DICTIONARY 
+    # ==========================================
+    # 2. UPGRADED MAPPING DICTIONARY (FTD & MTD)
+    # Format: "Metric Name": {"FTD": xlsb_col_index, "MTD": xlsb_col_index}
+    # IMPORTANT: Update the MTD numbers below to match your actual .xlsb columns!
+    # ==========================================
     metric_mapping = {
-        "Sales Tgt": 8,       # Column I
-        "Sales Ach": 15,      # Column P
-        "MAC Plan": 23,       # Column X
-        "MAC Actual": 29,     # Column AD
-        "Lines Plan": 32,     # Column AG
-        "Lines Act": 37,      # Column AL
-        "OTGS Plan": 16,      # Column Q
-        "OTGS Act": 18,       # Column S
-        "Txns": 41            # Column AP
+        "Sales Tgt": {"FTD": 8,  "MTD": 7},    # FTD = Col I, MTD = Col J (Example)
+        "Sales Ach": {"FTD": 15, "MTD": 14},   # FTD = Col P, MTD = Col Q (Example)
+        "MAC Plan":  {"FTD": 23, "MTD": 22},   
+        "MAC Actual":{"FTD": 29, "MTD": 28},
+        "Lines Plan":{"FTD": 32, "MTD": 31},
+        "Lines Act": {"FTD": 37, "MTD": 36},
+        "OTGS Plan": {"FTD": 16, "MTD": 17},
+        "OTGS Act":  {"FTD": 18, "MTD": 19},
+        "Txns":      {"FTD": 41, "MTD": 40}
     }
     
-    # 3. Clean and convert ALL mapped columns to numeric at once
-    cols_to_sum = list(metric_mapping.values())
+    # 3. Extract all unique column indices we need to process
+    cols_to_sum = []
+    for mapping in metric_mapping.values():
+        cols_to_sum.extend([mapping["FTD"], mapping["MTD"]])
+    cols_to_sum = list(set(cols_to_sum)) # Remove duplicates
+    
+    # Clean and convert ALL mapped columns to numeric at once
     for col_idx in cols_to_sum:
         df[col_idx] = pd.to_numeric(df[col_idx], errors='coerce').fillna(0)
     
@@ -91,28 +100,42 @@ def process_and_update_sheet(creds, xlsb_path):
     ist_timezone = timezone(timedelta(hours=5, minutes=30))
     current_time = datetime.now(ist_timezone).strftime("%d-%b-%Y %I:%M %p")
     
-    # 5. Loop through the Google Sheet and update based on the mapping
+    # 5. Loop through the Google Sheet and update FTD, MTD, and Last Updated
     for index, row in enumerate(target_data):
         if len(row) >= 2: 
             store_code = str(row[0]).strip() 
             cell_type = str(row[1]).strip()
             
             if store_code in grouped_data and cell_type in metric_mapping:
-                xlsb_col_index = metric_mapping[cell_type]
-                new_val = grouped_data[store_code][xlsb_col_index]
                 
-                cells_to_update.append(gspread.Cell(row=index+1, col=3, value=new_val))
+                # Get the specific column indexes for this metric
+                ftd_col_index = metric_mapping[cell_type]["FTD"]
+                mtd_col_index = metric_mapping[cell_type]["MTD"]
+                
+                # Extract the summed values
+                ftd_val = grouped_data[store_code][ftd_col_index]
+                mtd_val = grouped_data[store_code][mtd_col_index]
+                
+                # Queue FTD Update (Column C / col=3)
+                cells_to_update.append(gspread.Cell(row=index+1, col=3, value=ftd_val))
+                
+                # Queue MTD Update (Column D / col=4)
+                cells_to_update.append(gspread.Cell(row=index+1, col=4, value=mtd_val))
+                
+                # Queue Timestamp Update (Column E / col=5)
+                # (We only need to push the timestamp once per row, so doing it here is perfect)
                 cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
                 
     if cells_to_update:
-        print(f"Updating {len(cells_to_update)//2} Sales records in Google Sheets...")
+        # Divide by 3 because we are pushing 3 cells per row (FTD, MTD, Timestamp)
+        print(f"Updating {len(cells_to_update)//3} Sales records (FTD & MTD) in Google Sheets...")
         worksheet.update_cells(cells_to_update)
         print("Sales KPI Update complete!")
     else:
         print("No matching rows found to update for Sales KPIs.")
 def update_damage_metric(creds):
-    """Fetches multiple metrics from a separate Google Sheet and updates the dashboard."""
-    print(f"\n--- Processing Secondary Google Sheet Data ---")
+    """Fetches Damage data, calculates FTD and MTD, and updates the dashboard."""
+    print(f"\n--- Processing Secondary Google Sheet Data (FTD & MTD) ---")
     gc = gspread.authorize(creds)
     
     # 1. Open Source Sheet
@@ -125,42 +148,47 @@ def update_damage_metric(creds):
         return
         
     df_source = pd.DataFrame(source_data)
-    if df_source.empty:
+    if df_source.empty or len(df_source.columns) < 5:
+        print("Damage source sheet is empty or doesn't have enough columns.")
         return
         
-    # 2. Filter for Yesterday's Date (Column A / Index 0)
-    df_source[0] = pd.to_datetime(df_source[0], errors='coerce').dt.normalize()
+    # 2. Determine Dates (Yesterday and Start of Month)
     ist_timezone = timezone(timedelta(hours=5, minutes=30))
     yesterday = (datetime.now(ist_timezone) - timedelta(days=1)).date()
+    start_of_month = yesterday.replace(day=1) # 1st day of the current month
     
-    df_filtered = df_source[df_source[0].dt.date == yesterday].copy()
-    if df_filtered.empty:
-        print(f"No data found for yesterday ({yesterday.strftime('%m/%d/%Y')}).")
+    print(f"Calculating FTD for {yesterday} and MTD from {start_of_month} to {yesterday}")
+    
+    # Normalize the date column (Column A / Index 0)
+    df_source[0] = pd.to_datetime(df_source[0], errors='coerce').dt.normalize()
+    
+    # Create two filtered DataFrames: One for FTD, one for MTD
+    df_ftd = df_source[df_source[0].dt.date == yesterday].copy()
+    df_mtd = df_source[(df_source[0].dt.date >= start_of_month) & (df_source[0].dt.date <= yesterday)].copy()
+    
+    if df_mtd.empty:
+        print("No MTD data found for this month.")
         return
         
-    # Clean Store Code (Col B / Index 1)
-    df_filtered[1] = df_filtered[1].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
-    
-    # ==========================================
-    # 3. CREATE YOUR MAPPING DICTIONARY HERE
-    # Format: {"Exact Name in Master Sheet": source_sheet_column_index}
-    # Index guide: A=0, B=1, C=2, D=3, E=4, F=5, G=6...
-    # ==========================================
+    # 3. Clean and Mapped Columns
     sheet_metric_mapping = {
         "DT(Damage)": 4,    # Column E
-        "DD(Expiry)": 5,    # Assuming this is in Column F. Change as needed!
-        "CO(shrink)": 6     # Assuming this is in Column G. Change as needed!
+        "DD(Expiry)": 5,    # Column F (Example - Update if different)
+        "CO(shrink)": 6     # Column G (Example - Update if different)
     }
-    
-    # Clean and convert all mapped columns to numbers
     cols_to_sum = list(sheet_metric_mapping.values())
-    for col_idx in cols_to_sum:
-        # Ensures that if a column is missing in the sheet, it doesn't crash
-        if col_idx in df_filtered.columns: 
-            df_filtered[col_idx] = pd.to_numeric(df_filtered[col_idx], errors='coerce').fillna(0)
     
-    # Group by Store Code and sum ALL mapped columns simultaneously
-    grouped_data = df_filtered.groupby(1)[cols_to_sum].sum().to_dict('index')
+    # Clean Store Codes and force metrics to numeric for BOTH DataFrames
+    for df in [df_ftd, df_mtd]:
+        if not df.empty:
+            df[1] = df[1].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+            for col_idx in cols_to_sum:
+                if col_idx in df.columns: 
+                    df[col_idx] = pd.to_numeric(df[col_idx], errors='coerce').fillna(0)
+    
+    # Group by Store Code and sum
+    grouped_ftd = df_ftd.groupby(1)[cols_to_sum].sum().to_dict('index') if not df_ftd.empty else {}
+    grouped_mtd = df_mtd.groupby(1)[cols_to_sum].sum().to_dict('index') if not df_mtd.empty else {}
     
     # 4. Update Target Master Sheet
     print("Connecting to target Google Sheet...")
@@ -176,21 +204,23 @@ def update_damage_metric(creds):
             store_code = str(row[0]).strip() 
             cell_type = str(row[1]).strip()
             
-            # If store code is found AND the row name matches our dictionary
-            if store_code in grouped_data and cell_type in sheet_metric_mapping:
-                # Get the correct column index from the dictionary
+            # Check if metric is in our mapping AND the store has at least some MTD data
+            if cell_type in sheet_metric_mapping and store_code in grouped_mtd:
                 col_index = sheet_metric_mapping[cell_type]
                 
-                # Check if that data exists for the store
-                if col_index in grouped_data[store_code]:
-                    new_val = grouped_data[store_code][col_index]
-                    
-                    # Update FTD_Value (Col C) & Last_Updated (Col E)
-                    cells_to_update.append(gspread.Cell(row=index+1, col=3, value=new_val))
-                    cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
+                # Extract values (Default to 0 if the store had no data for that specific bucket)
+                ftd_val = grouped_ftd.get(store_code, {}).get(col_index, 0)
+                mtd_val = grouped_mtd.get(store_code, {}).get(col_index, 0)
+                
+                # Update FTD_Value (Col C)
+                cells_to_update.append(gspread.Cell(row=index+1, col=3, value=ftd_val))
+                # Update MTD_Value (Col D)
+                cells_to_update.append(gspread.Cell(row=index+1, col=4, value=mtd_val))
+                # Update Last_Updated (Col E)
+                cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
                 
     if cells_to_update:
-        print(f"Updating {len(cells_to_update)//2} records from the secondary sheet...")
+        print(f"Updating {len(cells_to_update)//3} records (FTD & MTD) from the secondary sheet...")
         target_ws.update_cells(cells_to_update)
         print("Secondary Sheet Update complete!")
     else:
