@@ -236,6 +236,9 @@ if files:
 # ==========================================
 # 4. ANALYSIS & LOGIC
 # ==========================================
+# ==========================================
+# 4. ANALYSIS & LOGIC
+# ==========================================
 print("Running Analysis...")
 
 sql_query = """
@@ -363,7 +366,7 @@ try:
                         flag_pan_india = True
                 except: pass
 
-        # F. E-Commerce (ZECM) Check
+        # F.1 E-Commerce (ZECM) Check
         flag_zecm_active = False
         if has_member_sales:
             try:
@@ -371,13 +374,22 @@ try:
                 if sales_res and sales_res[0] and sales_res[0] > 0:
                     flag_zecm_active = True
             except: pass
+            
+        # F.2 Walk-in (ZFP) Check [NEW LOGIC]
+        flag_zfp_active = False
+        if has_member_sales:
+            try:
+                # Check for positive sales in ZFP channel
+                zfp_res = con.execute(f"SELECT SUM(Current_Month + Month_Minus_1 + Month_Minus_2 + Month_Minus_3 + Month_Minus_4 + Month_Minus_5 + Month_Minus_6) FROM member_sales WHERE CAST(MEMBERSHIP_NBR AS VARCHAR) = '{mem_id_str}' AND CHANNEL_TYPE = 'ZFP'").fetchone()
+                if zfp_res and zfp_res[0] and zfp_res[0] > 0:
+                    flag_zfp_active = True
+            except: pass
 
         # G. History (Last Active)
         latest_missing_month = "N/A"
         found_files = []
         if not user_matches.empty: found_files = user_matches['Found_In_File'].unique().tolist()
         if len(found_files) > 0 and len(all_master_files) > len(found_files):
-            # SAFEGUARD: Use set subtraction first to ensure list isn't empty
             missing_set = set(all_master_files) - set(found_files)
             if missing_set:
                 missing_files = list(missing_set)
@@ -438,16 +450,20 @@ try:
 
         # 4. Pan India
         elif flag_pan_india:
-            # CHANGED: Now points to Store Manager instead of Market Manager
             final_display_rca = "Member is in Pan India list. Requires Store Manager approval."
             final_status = "🟡 ACTION REQUIRED"
+            
+        # 5. Walk-in (ZFP) Logic [NEW]
+        elif flag_zfp_active:
+             final_display_rca = "Walk-in member will be added to beat post store manager approval."
+             final_status = "🟡 ACTION REQUIRED"
 
-        # 5. E-Commerce
+        # 6. E-Commerce
         elif flag_zecm_active:
             final_display_rca = "Member has active E-Commerce sales. Requires E-Com Team approval."
             final_status = "🟡 ACTION REQUIRED"
 
-        # 6. NSU Logic
+        # 7. NSU Logic
         elif flag_is_nsu:
             if flag_nsu_sales_team:
                 final_display_rca = "New Sign Up (NSU) verified by Sales Team. Approved for addition."
@@ -456,13 +472,12 @@ try:
                 final_display_rca = "New Sign Up (NSU) verified by Store Team. Requires Store Manager approval."
                 final_status = "🟡 ACTION REQUIRED"
 
-        # 7. Clean Case / Unknown
+        # 8. Clean Case / Unknown
         else:
             if latest_missing_month != "N/A":
                 final_display_rca = f"Returning Member (Last active: {latest_missing_month}). Approved for addition."
                 final_status = "🟢 AUTO-APPROVED"
             else:
-                # CHANGED MESSAGE HERE
                 final_display_rca = "Given member didn't meet any criteria. Please check if the member number is correct. If yes, try contacting the Sales team."
                 final_status = "🔴 REJECTED - NOT FOUND"
 
