@@ -1517,43 +1517,56 @@ def process_price_override(creds, file_path):
     print(f"\n--- Processing Price Override (Code 2 Items/Value) ---")
     
     try:
-        # Read CSV (Assume header is on row 1, so data starts row 2)
-        # Using encoding='latin1' to prevent crashes on special characters
-        df = pd.read_csv(file_path, encoding='latin1')
+        # Read CSV with latin1 and low_memory=False to ensure it reads safely
+        # header=None so we can target by exact index (0-based)
+        df = pd.read_csv(file_path, encoding='latin1', low_memory=False, header=None)
     except Exception as e:
         print(f"Failed to read PriceOverride.csv. Error: {e}")
         return
 
-    # 1. Standardize Columns
+    # 1. Standardize Columns 
     # Col A (Idx 0) = Store Code
-    # Col L (Idx 11) = Reason Code (Targeting "5")
+    # Col L (Idx 11) = Reason Code (Targeting 5)
     # Col H (Idx 7) = Qty (For "Code 2 Items")
     # Col K (Idx 10) = Value (For "Code 2 Value")
 
-    # Rename columns by index for easier access if headers vary
-    df.columns = range(df.shape[1])
-    
-    # 2. Clean Store Code (Col 0)
-    df[0] = df[0].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
-    
-    # 3. Filter for Code "5" in Column L (Index 11)
-    # We convert to string first to ensure "5" and 5 matches
-    df_code5 = df[df[11].astype(str).str.strip() == "5"].copy()
-    
-    if df_code5.empty:
-        print("No rows found with Code 5 in Column L.")
+    if df.shape[1] <= 11:
+        print(f"Error: CSV only has {df.shape[1]} columns, expected at least 12.")
         return
 
-    # 4. Convert Numeric Columns
-    # Col H (7) -> Items
-    # Col K (10) -> Value
-    df_code5[7] = pd.to_numeric(df_code5[7], errors='coerce').fillna(0)
-    df_code5[10] = pd.to_numeric(df_code5[10], errors='coerce').fillna(0)
+    # 2. Clean Store Code (Col A / Idx 0)
+    df[0] = df[0].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
     
-    # 5. Group by Store and Sum
-    grouped = df_code5.groupby(0)[[7, 10]].sum().to_dict('index')
+    # 3. Clean Reason Code (Col L / Idx 11) -> Force to pure numbers to match 5 safely
+    df[11] = pd.to_numeric(df[11], errors='coerce').fillna(-1)
     
-    # 6. Update Master Sheet
+    # 4. Filter for Reason Code 5
+    df_code5 = df[df[11] == 5].copy()
+    
+    if df_code5.empty:
+        print("No rows found with Reason Code 5 in Column L.")
+        return
+
+    # 5. Convert Numeric Columns safely (Col H and Col K)
+    df_code5[7] = pd.to_numeric(df_code5[7], errors='coerce').fillna(0.0)
+    df_code5[10] = pd.to_numeric(df_code5[10], errors='coerce').fillna(0.0)
+    
+    # 6. Group by Store and Sum
+    dict_items = df_code5.groupby(0)[7].sum().to_dict()  # Items
+    dict_value = df_code5.groupby(0)[10].sum().to_dict() # Value
+    
+    # Combine into a unified, lowercase dictionary for safe lookup
+    grouped = {}
+    all_stores = set(dict_items.keys()).union(set(dict_value.keys()))
+    
+    for store in all_stores:
+        if store == 'nan' or not store: continue
+        grouped[store] = {
+            "code 2 items": dict_items.get(store, 0.0),
+            "code 2 value": dict_value.get(store, 0.0)
+        }
+
+    # 7. Update Target Master Sheet
     print("Connecting to target Master Sheet...")
     gc = gspread.authorize(creds)
     target_sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
@@ -1564,27 +1577,18 @@ def process_price_override(creds, file_path):
     ist_timezone = timezone(timedelta(hours=5, minutes=30))
     current_time = datetime.now(ist_timezone).strftime("%d-%b-%Y %I:%M %p")
     
-    # Mapping: Metric Name -> CSV Column Index (in our grouped dict)
-    # 7 is items, 10 is value
-    metric_map = {
-        "Code 2 Items": 7,
-        "Code 2 Value": 10
-    }
+    valid_metrics = ["code 2 items", "code 2 value"]
     
     for index, row in enumerate(target_data):
         if len(row) >= 2:
             store_code = str(row[0]).strip()
-            cell_type = str(row[1]).strip()
             
-            if cell_type in metric_map and store_code in grouped:
-                col_idx = metric_map[cell_type]
+            # Clean the cell text from the sheet (lowercase, remove double spaces)
+            cell_type_clean = " ".join(str(row[1]).lower().split())
+            
+            if cell_type_clean in valid_metrics and store_code in grouped:
+                val = grouped[store_code].get(cell_type_clean, 0.0)
                 
-                # Retrieve the summed value
-                # Note: CSV usually provides a snapshot, so we use the same value for FTD & MTD 
-                # (unless you have a date column to filter by, but usually these reports are daily snapshots)
-                val = grouped[store_code][col_idx]
-                
-                # Queue Update
                 cells_to_update.append(gspread.Cell(row=index+1, col=3, value=val)) # FTD
                 cells_to_update.append(gspread.Cell(row=index+1, col=4, value=val)) # MTD
                 cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
@@ -1595,7 +1599,6 @@ def process_price_override(creds, file_path):
         print("Price Override Update complete!")
     else:
         print("No matching rows found to update for Price Override.")
-
 
 def process_article_sales_report(creds, file_path):
     """Reads ArticleSalesReport.csv and calculates <5 (Col AB), CWO, and NOH metrics."""
