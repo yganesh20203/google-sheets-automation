@@ -144,6 +144,7 @@ def process_and_update_sheet(creds, xlsb_path):
         print("Sales KPI Update complete!")
     else:
         print("No matching rows found to update for Sales KPIs.")
+
 def update_damage_metric(creds):
     """Fetches Damage data, calculates FTD and MTD, and updates the dashboard."""
     print(f"\n--- Processing Secondary Google Sheet Data (FTD & MTD) ---")
@@ -170,12 +171,19 @@ def update_damage_metric(creds):
     
     print(f"Calculating FTD for {yesterday} and MTD from {start_of_month} to {yesterday}")
     
-    # Normalize the date column (Column A / Index 0)
+    # --- BUG FIX: Convert standard Python dates to Pandas Timestamps ---
+    pd_yesterday = pd.to_datetime(yesterday)
+    pd_start_of_month = pd.to_datetime(start_of_month)
+    
+    # Normalize the date column (Column A / Index 0) safely
     df_source[0] = pd.to_datetime(df_source[0], errors='coerce').dt.normalize()
     
-    # Create two filtered DataFrames: One for FTD, one for MTD
-    df_ftd = df_source[df_source[0].dt.date == yesterday].copy()
-    df_mtd = df_source[(df_source[0].dt.date >= start_of_month) & (df_source[0].dt.date <= yesterday)].copy()
+    # Drop rows where the date is completely invalid or blank (like headers)
+    df_source = df_source.dropna(subset=[0])
+    
+    # Create two filtered DataFrames using the Pandas Timestamps
+    df_ftd = df_source[df_source[0] == pd_yesterday].copy()
+    df_mtd = df_source[(df_source[0] >= pd_start_of_month) & (df_source[0] <= pd_yesterday)].copy()
     
     if df_mtd.empty:
         print("No MTD data found for this month.")
@@ -184,8 +192,8 @@ def update_damage_metric(creds):
     # 3. Clean and Mapped Columns
     sheet_metric_mapping = {
         "DT(Damage)": 4,    # Column E
-        "DD(Expiry)": 5,    # Column F (Example - Update if different)
-        "CO(shrink)": 6     # Column G (Example - Update if different)
+        "DD(Expiry)": 5,    # Column F 
+        "CO(shrink)": 6     # Column G 
     }
     cols_to_sum = list(sheet_metric_mapping.values())
     
@@ -236,8 +244,7 @@ def update_damage_metric(creds):
         print("Secondary Sheet Update complete!")
     else:
         print("No matching rows found to update for secondary sheet.")
-
-
+        
 def update_third_metric(creds):
     """Fetches T-2 data from the third Google Sheet, calculates FTD and MTD."""
     print(f"\n--- Processing Third Google Sheet (T-2 Data) ---")
