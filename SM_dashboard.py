@@ -2282,74 +2282,58 @@ def update_veh_released_metric(creds):
         print(f"No matching rows found for metric '{metric_name}'.")
 
 def process_inventory_ageing(creds, file_path):
-    """Reads Inventory_Aeging.csv and calculates Claims, >180 Days, and Type 12 metrics."""
+    """Reads Inventory_Aeging.csv and calculates Claims, >180 Days, and Dual MRP metrics."""
     print(f"\n--- Processing Inventory Ageing Report ---")
     
     try:
-        # Read CSV (using latin1 to handle any special characters, low_memory=False for safety)
-        # header=None so we can reliably target columns by their exact index
         df = pd.read_csv(file_path, encoding='latin1', low_memory=False, header=None)
     except Exception as e:
         print(f"Failed to read Inventory_Aeging.csv. Error: {e}")
         return
 
-    # 1. Column Mapping (0-based Index)
-    # Col O (Idx 14) = Store Code
-    # Col P (Idx 15) = Category/Type (Targeting 7, 8, or 12)
-    # Col AC (Idx 28) = Ageing Days (Targeting > 180)
-    # Col AF (Idx 31) = Value to sum for Claims (7, 8, >180)
-    # Col AH (Idx 33) = Value to sum for Type 12
-    
-    # Check if the dataframe has enough columns to reach Col AH
     if df.shape[1] <= 33:
         print(f"Error: CSV only has {df.shape[1]} columns, expected at least 34 to reach Column AH.")
         return
 
-    # 2. Clean and Standardize Columns
-    # Store Code (Col O / Idx 14): Force string, remove ".0", strip whitespace
+    # 1. Clean Store Code (Col O / Idx 14)
     df[14] = df[14].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
     
-    # Category/Type (Col P / Idx 15): Clean to string for exact matching ('7', '8', '12')
-    df[15] = df[15].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
-    
-    # Numeric Columns: Convert to float, coercing errors to 0
-    df[28] = pd.to_numeric(df[28], errors='coerce').fillna(0.0) # Col AC
-    df[31] = pd.to_numeric(df[31], errors='coerce').fillna(0.0) # Col AF
-    df[33] = pd.to_numeric(df[33], errors='coerce').fillna(0.0) # Col AH (NEW)
+    # 2. Convert Column P (Category), AC (Days), AF (Claims Val), AH (Dual MRP Val) to PURE NUMBERS
+    # This completely eliminates errors from "07", " 7 ", or "7.0"
+    df[15] = pd.to_numeric(df[15], errors='coerce').fillna(-1) 
+    df[28] = pd.to_numeric(df[28], errors='coerce').fillna(0.0)
+    df[31] = pd.to_numeric(df[31], errors='coerce').fillna(0.0)
+    df[33] = pd.to_numeric(df[33], errors='coerce').fillna(0.0)
 
-    # 3. Calculate the Metrics using Pandas Filtering & Grouping
+    # 3. Calculate the Metrics using Numeric Filtering
     
-    # Metric 1: Claims Regular Value (Col P == '7', Sum Col AF)
-    df_regular = df[df[15] == '7']
+    # Metric 1: Claims Regular Value (Col P == 7, Sum Col AF)
+    df_regular = df[df[15] == 7]
     dict_regular = df_regular.groupby(14)[31].sum().to_dict()
 
-    # Metric 2: Claims RTV Value (Col P == '8', Sum Col AF)
-    df_rtv = df[df[15] == '8']
+    # Metric 2: Claims RTV Value (Col P == 8, Sum Col AF)
+    df_rtv = df[df[15] == 8]
     dict_rtv = df_rtv.groupby(14)[31].sum().to_dict()
 
-    # Metric 3: >180 Days Claims Inventory (Col P in ['7','8'] AND Col AC > 180, Sum Col AF)
-    df_180 = df[(df[15].isin(['7', '8'])) & (df[28] > 180)]
+    # Metric 3: >180 Days Claims Inventory (Col P in [7,8] AND Col AC > 180, Sum Col AF)
+    df_180 = df[(df[15].isin([7, 8])) & (df[28] > 180)]
     dict_180 = df_180.groupby(14)[31].sum().to_dict()
 
-    # Metric 4 (NEW): Col P == '12', Sum Col AH
-    df_12 = df[df[15] == '12']
+    # Metric 4: Dual MRP Value (Col P == 12, Sum Col AH)
+    df_12 = df[df[15] == 12]
     dict_12 = df_12.groupby(14)[33].sum().to_dict()
 
-    # Combine into a unified dictionary for easy lookup
+    # Combine into a unified dictionary
     store_metrics = {}
-    
-    # Get all unique store codes from the 4 dictionaries
     all_stores = set(dict_regular.keys()).union(set(dict_rtv.keys())).union(set(dict_180.keys())).union(set(dict_12.keys()))
     
     for store in all_stores:
         if store == 'nan' or not store: continue
         store_metrics[store] = {
-            "Claims Regular Value": dict_regular.get(store, 0.0),
-            "Claims RTV Value": dict_rtv.get(store, 0.0),
-            ">180 Days Claims Inventory": dict_180.get(store, 0.0),
-            
-            # ⚠️ RENAME THIS TO MATCH YOUR DASHBOARD METRIC NAME ⚠️
-            "Dual MRP Value": dict_12.get(store, 0.0) 
+            "claims regular value": dict_regular.get(store, 0.0),
+            "claims rtv value": dict_rtv.get(store, 0.0),
+            ">180 days claims inventory": dict_180.get(store, 0.0),
+            "dual mrp value": dict_12.get(store, 0.0) 
         }
 
     # 4. Update Target Master Sheet
@@ -2363,20 +2347,21 @@ def process_inventory_ageing(creds, file_path):
     ist_timezone = timezone(timedelta(hours=5, minutes=30))
     current_time = datetime.now(ist_timezone).strftime("%d-%b-%Y %I:%M %p")
     
-    # Make sure to update the placeholder name here as well if you change it above!
-    target_metric_names = ["Claims Regular Value", "Claims RTV Value", ">180 Days Claims Inventory", "Metric 12 Value","Dual MRP Value"]
+    # Target Metric Names (All lowercased to avoid capitalization/spacing mismatch)
+    valid_metrics = ["claims regular value", "claims rtv value", ">180 days claims inventory", "dual mrp value"]
 
     for index, row in enumerate(target_data):
         if len(row) >= 2: 
             store_code = str(row[0]).strip() 
-            cell_type = str(row[1]).strip()
             
-            if cell_type in target_metric_names and store_code in store_metrics:
+            # Clean the cell text from the sheet (lowercase, remove double spaces)
+            cell_type_clean = " ".join(str(row[1]).lower().split())
+            
+            if cell_type_clean in valid_metrics and store_code in store_metrics:
                 
                 # Fetch the calculated value
-                val = store_metrics[store_code].get(cell_type, 0.0)
+                val = store_metrics[store_code].get(cell_type_clean, 0.0)
                 
-                # Update FTD and MTD (Snapshots update both columns simultaneously)
                 cells_to_update.append(gspread.Cell(row=index+1, col=3, value=val))
                 cells_to_update.append(gspread.Cell(row=index+1, col=4, value=val))
                 cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
@@ -2387,8 +2372,6 @@ def process_inventory_ageing(creds, file_path):
         print("Inventory Ageing Update complete!")
     else:
         print("No matching rows found to update for Inventory Ageing metrics.")
-
-
 
 def main():
     creds = authenticate_service_account()
