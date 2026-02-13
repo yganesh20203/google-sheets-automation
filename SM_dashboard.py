@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
+import time
 
 # Scopes for Drive (downloading .xlsb) and Sheets (updating the dashboard)
 SCOPES = [
