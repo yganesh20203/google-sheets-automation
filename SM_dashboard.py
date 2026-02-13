@@ -1268,7 +1268,1126 @@ def update_expense_metrics(creds):
         print("Expense Metrics Update complete!")
     else:
         print("No matching expense rows found to update.")
+
+
+def update_osa_metric(creds):
+    """Fetches 'OSA %' from two side-by-side tables (FTD & MTD) on the 'View' tab."""
+    print(f"\n--- Processing OSA % Metric ---")
+    gc = gspread.authorize(creds)
+    
+    # 1. Open Source Sheet
+    source_sheet_id = '1zSjGXEmGdM0sOVzOfweyu4KPkmp0qjohe9R0Zl7rRhk'
+    try:
+        # Targeting the tab named "View"
+        source_ws = gc.open_by_key(source_sheet_id).worksheet('View')
+        source_data = source_ws.get_all_values()
+    except Exception as e:
+        print(f"Failed to open OSA source sheet. Error: {e}")
+        return
+
+    if len(source_data) < 2: return
+
+    # 2. Prepare Mappings
+    # Create a Reverse Mapping: "Amritsar" -> "4702"
+    # This allows us to look up the Store Name from the sheet and find its ID
+    REVERSE_STORE_MAPPING = {v.lower().strip(): k for k, v in STORE_MAPPING.items()}
+
+    def safe_float(val):
+        val_str = str(val).replace(',', '').strip()
+        if not val_str or val_str in ['-', 'NA', '#DIV/0!', '#N/A']: return 0.0
+        is_percent = False
+        if val_str.endswith('%'):
+            val_str = val_str[:-1]
+            is_percent = True
+        try:
+            num = float(val_str)
+            # Store as decimal (e.g. 0.95) so Sheets formats it as 95%
+            return num / 100.0 if is_percent else num
+        except ValueError:
+            return 0.0
+
+    ftd_data = {} 
+    mtd_data = {} 
+
+    # 3. Extract Data
+    # FTD Table: Store Name = Col B (Idx 1), Value = Col G (Idx 6)
+    # MTD Table: Store Name = Col I (Idx 8), Value = Col N (Idx 13)
+    
+    for row in source_data:
+        # --- Process FTD Part ---
+        if len(row) > 6:
+            store_name_ftd = str(row[1]).strip().lower()
+            # Check if this name exists in our mapping (e.g., "amritsar" -> "4702")
+            if store_name_ftd in REVERSE_STORE_MAPPING:
+                store_code = REVERSE_STORE_MAPPING[store_name_ftd]
+                val = safe_float(row[6])
+                ftd_data[store_code] = val
         
+        # --- Process MTD Part ---
+        if len(row) > 13:
+            store_name_mtd = str(row[8]).strip().lower()
+            if store_name_mtd in REVERSE_STORE_MAPPING:
+                store_code = REVERSE_STORE_MAPPING[store_name_mtd]
+                val = safe_float(row[13])
+                mtd_data[store_code] = val
+
+    # 4. Update Target Master Sheet
+    print("Connecting to target Master Sheet...")
+    target_sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
+    target_ws = gc.open_by_key(target_sheet_id).worksheet('Store_Data') 
+    target_data = target_ws.get_all_values()
+    
+    cells_to_update = []
+    ist_timezone = timezone(timedelta(hours=5, minutes=30))
+    current_time = datetime.now(ist_timezone).strftime("%d-%b-%Y %I:%M %p")
+    
+    for index, row in enumerate(target_data):
+        if len(row) >= 2: 
+            store_code = str(row[0]).strip() 
+            cell_type = str(row[1]).strip()
+            
+            # Match strictly against "OSA %"
+            if cell_type == "OSA %":
+                
+                ftd_val = ftd_data.get(store_code, 0.0)
+                mtd_val = mtd_data.get(store_code, 0.0)
+                
+                cells_to_update.append(gspread.Cell(row=index+1, col=3, value=ftd_val))
+                cells_to_update.append(gspread.Cell(row=index+1, col=4, value=mtd_val))
+                cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
+                
+    if cells_to_update:
+        print(f"Updating {len(cells_to_update)//3} OSA records...")
+        target_ws.update_cells(cells_to_update)
+        print("OSA % Update complete!")
+    else:
+        print("No matching rows found to update for OSA %.")
+
+
+def update_qc_tpv_vd_metrics(creds):
+    """Fetches QC Orders, TPV, and VD metrics from 'Sheet1'."""
+    print(f"\n--- Processing QC Orders, TPV, and VD Metrics ---")
+    gc = gspread.authorize(creds)
+    
+    # 1. Open Source Sheet
+    source_sheet_id = '16Syh3BNGT9tOdklfNO2VObYxn_7vMxZXmh_Z_qIIHQM'
+    try:
+        source_ws = gc.open_by_key(source_sheet_id).worksheet('Sheet1')
+        source_data = source_ws.get_all_values()
+    except Exception as e:
+        print(f"Failed to open QC/TPV source sheet. Error: {e}")
+        return
+
+    if len(source_data) < 2: return
+
+    # 2. Determine Dates
+    ist_timezone = timezone(timedelta(hours=5, minutes=30))
+    yesterday = (datetime.now(ist_timezone) - timedelta(days=1)).date()
+    start_of_month = yesterday.replace(day=1)
+    
+    print(f"Metrics: FTD for {yesterday} | MTD from {start_of_month}")
+
+    # 3. Helper to clean numbers
+    def safe_float(val):
+        val_str = str(val).replace(',', '').strip()
+        if not val_str or val_str in ['-', 'NA', '#DIV/0!', '#N/A', '']: return 0.0
+        try:
+            return float(val_str)
+        except ValueError:
+            return 0.0
+
+    # 4. Initialize Data Structures
+    # We need to sum numerators and denominators separately for TPV and VD
+    # Format: {'StoreCode': {'QC': 0, 'TPV_Num': 0, 'TPV_Den': 0, 'VD_Num': 0, 'VD_Den': 0}}
+    ftd_data = {}
+    mtd_data = {}
+
+    # 5. Process Rows
+    # Date = Col B (Index 1) - mm-dd-yyyy
+    # Store Name = Col D (Index 3)
+    # QC Orders = Sum of Col K (Index 10)
+    # TPV = Sum of Col BG (Index 58) / Sum of Col BI (Index 60)
+    # VD = Sum of Col BK (Index 62) / Sum of Col BJ (Index 61)
+    
+    # Reverse mapping to find Store Code (e.g. "Amritsar" -> "4702")
+    REVERSE_STORE_MAPPING = {v.lower().strip(): k for k, v in STORE_MAPPING.items()}
+
+    for row in source_data[1:]: # Skip header
+        if len(row) > 62: # Ensure row is long enough to reach Col BK (Index 62)
+            
+            # Parse Date
+            try:
+                row_date = pd.to_datetime(row[1], format='%m-%d-%Y', errors='coerce').date()
+                if pd.isna(row_date): continue
+            except:
+                continue
+            
+            # Match Store
+            store_name_raw = str(row[3]).strip().lower()
+            if store_name_raw in REVERSE_STORE_MAPPING:
+                store_code = REVERSE_STORE_MAPPING[store_name_raw]
+                
+                # Extract Values
+                qc_val = safe_float(row[10])      # Col K
+                
+                tpv_num = safe_float(row[58])     # Col BG
+                tpv_den = safe_float(row[60])     # Col BI
+                
+                vd_num = safe_float(row[62])      # Col BK
+                vd_den = safe_float(row[61])      # Col BJ
+                
+                # Init Dictionaries
+                if store_code not in ftd_data: 
+                    ftd_data[store_code] = {'QC': 0.0, 'TPV_Num': 0.0, 'TPV_Den': 0.0, 'VD_Num': 0.0, 'VD_Den': 0.0}
+                if store_code not in mtd_data: 
+                    mtd_data[store_code] = {'QC': 0.0, 'TPV_Num': 0.0, 'TPV_Den': 0.0, 'VD_Num': 0.0, 'VD_Den': 0.0}
+                
+                # Accumulate MTD
+                if start_of_month <= row_date <= yesterday:
+                    mtd_data[store_code]['QC'] += qc_val
+                    mtd_data[store_code]['TPV_Num'] += tpv_num
+                    mtd_data[store_code]['TPV_Den'] += tpv_den
+                    mtd_data[store_code]['VD_Num'] += vd_num
+                    mtd_data[store_code]['VD_Den'] += vd_den
+                
+                # Accumulate FTD
+                if row_date == yesterday:
+                    ftd_data[store_code]['QC'] += qc_val
+                    ftd_data[store_code]['TPV_Num'] += tpv_num
+                    ftd_data[store_code]['TPV_Den'] += tpv_den
+                    ftd_data[store_code]['VD_Num'] += vd_num
+                    ftd_data[store_code]['VD_Den'] += vd_den
+
+    # 6. Update Target Master Sheet
+    print("Connecting to target Master Sheet...")
+    target_sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
+    target_ws = gc.open_by_key(target_sheet_id).worksheet('Store_Data') 
+    target_data = target_ws.get_all_values()
+    
+    cells_to_update = []
+    current_time = datetime.now(ist_timezone).strftime("%d-%b-%Y %I:%M %p")
+    
+    # Define targets
+    targets = ["QC Orders", "TPV", "VD"]
+
+    for index, row in enumerate(target_data):
+        if len(row) >= 2: 
+            store_code = str(row[0]).strip() 
+            cell_type = str(row[1]).strip()
+            
+            if cell_type in targets and store_code in mtd_data:
+                
+                ftd_vals = ftd_data.get(store_code, {'QC': 0, 'TPV_Num': 0, 'TPV_Den': 0, 'VD_Num': 0, 'VD_Den': 0})
+                mtd_vals = mtd_data.get(store_code, {'QC': 0, 'TPV_Num': 0, 'TPV_Den': 0, 'VD_Num': 0, 'VD_Den': 0})
+                
+                ftd_final = 0.0
+                mtd_final = 0.0
+                
+                if cell_type == "QC Orders":
+                    ftd_final = ftd_vals['QC']
+                    mtd_final = mtd_vals['QC']
+                    
+                elif cell_type == "TPV":
+                    # Sum(BG) / Sum(BI)
+                    ftd_final = ftd_vals['TPV_Num'] / ftd_vals['TPV_Den'] if ftd_vals['TPV_Den'] else 0.0
+                    mtd_final = mtd_vals['TPV_Num'] / mtd_vals['TPV_Den'] if mtd_vals['TPV_Den'] else 0.0
+                    
+                elif cell_type == "VD":
+                    # Sum(BK) / Sum(BJ)
+                    ftd_final = ftd_vals['VD_Num'] / ftd_vals['VD_Den'] if ftd_vals['VD_Den'] else 0.0
+                    mtd_final = mtd_vals['VD_Num'] / mtd_vals['VD_Den'] if mtd_vals['VD_Den'] else 0.0
+
+                # Queue updates
+                cells_to_update.append(gspread.Cell(row=index+1, col=3, value=ftd_final))
+                cells_to_update.append(gspread.Cell(row=index+1, col=4, value=mtd_final))
+                cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
+                
+    if cells_to_update:
+        print(f"Updating {len(cells_to_update)//3} QC/TPV/VD records...")
+        target_ws.update_cells(cells_to_update)
+        print("Metrics Update complete!")
+    else:
+        print("No matching rows found to update.")
+
+
+def process_price_override(creds, file_path):
+    """Reads PriceOverride.csv, filters for Code 5, and sums Items & Value."""
+    print(f"\n--- Processing Price Override (Code 2 Items/Value) ---")
+    
+    try:
+        # Read CSV (Assume header is on row 1, so data starts row 2)
+        # Using encoding='latin1' to prevent crashes on special characters
+        df = pd.read_csv(file_path, encoding='latin1')
+    except Exception as e:
+        print(f"Failed to read PriceOverride.csv. Error: {e}")
+        return
+
+    # 1. Standardize Columns
+    # Col A (Idx 0) = Store Code
+    # Col L (Idx 11) = Reason Code (Targeting "5")
+    # Col H (Idx 7) = Qty (For "Code 2 Items")
+    # Col K (Idx 10) = Value (For "Code 2 Value")
+
+    # Rename columns by index for easier access if headers vary
+    df.columns = range(df.shape[1])
+    
+    # 2. Clean Store Code (Col 0)
+    df[0] = df[0].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+    
+    # 3. Filter for Code "5" in Column L (Index 11)
+    # We convert to string first to ensure "5" and 5 matches
+    df_code5 = df[df[11].astype(str).str.strip() == "5"].copy()
+    
+    if df_code5.empty:
+        print("No rows found with Code 5 in Column L.")
+        return
+
+    # 4. Convert Numeric Columns
+    # Col H (7) -> Items
+    # Col K (10) -> Value
+    df_code5[7] = pd.to_numeric(df_code5[7], errors='coerce').fillna(0)
+    df_code5[10] = pd.to_numeric(df_code5[10], errors='coerce').fillna(0)
+    
+    # 5. Group by Store and Sum
+    grouped = df_code5.groupby(0)[[7, 10]].sum().to_dict('index')
+    
+    # 6. Update Master Sheet
+    print("Connecting to target Master Sheet...")
+    gc = gspread.authorize(creds)
+    target_sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
+    target_ws = gc.open_by_key(target_sheet_id).worksheet('Store_Data') 
+    target_data = target_ws.get_all_values()
+    
+    cells_to_update = []
+    ist_timezone = timezone(timedelta(hours=5, minutes=30))
+    current_time = datetime.now(ist_timezone).strftime("%d-%b-%Y %I:%M %p")
+    
+    # Mapping: Metric Name -> CSV Column Index (in our grouped dict)
+    # 7 is items, 10 is value
+    metric_map = {
+        "Code 2 Items": 7,
+        "Code 2 Value": 10
+    }
+    
+    for index, row in enumerate(target_data):
+        if len(row) >= 2:
+            store_code = str(row[0]).strip()
+            cell_type = str(row[1]).strip()
+            
+            if cell_type in metric_map and store_code in grouped:
+                col_idx = metric_map[cell_type]
+                
+                # Retrieve the summed value
+                # Note: CSV usually provides a snapshot, so we use the same value for FTD & MTD 
+                # (unless you have a date column to filter by, but usually these reports are daily snapshots)
+                val = grouped[store_code][col_idx]
+                
+                # Queue Update
+                cells_to_update.append(gspread.Cell(row=index+1, col=3, value=val)) # FTD
+                cells_to_update.append(gspread.Cell(row=index+1, col=4, value=val)) # MTD
+                cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
+
+    if cells_to_update:
+        print(f"Updating {len(cells_to_update)//3} Price Override records...")
+        target_ws.update_cells(cells_to_update)
+        print("Price Override Update complete!")
+    else:
+        print("No matching rows found to update for Price Override.")
+
+
+def process_article_sales_report(creds, file_path):
+    """Reads ArticleSalesReport.csv and calculates <5, CWO, and NOH metrics."""
+    print(f"\n--- Processing Article Sales Report (<5, CWO, NOH) ---")
+    
+    try:
+        # Read CSV with latin1 to handle potential special characters
+        df = pd.read_csv(file_path, encoding='latin1', header=None)
+    except Exception as e:
+        print(f"Failed to read ArticleSalesReport.csv. Error: {e}")
+        return
+
+    # 1. Clean Store Code (Assuming Column A / Index 0 based on logic)
+    # If user meant Col B for store, Col B < 5 check would fail. 
+    # Proceeding with Col A = Store, Col B = Metric.
+    df[0] = df[0].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+    
+    # 2. Define Helper for Numeric Conversion
+    def to_float(val):
+        try:
+            return float(str(val).replace(',', '').strip())
+        except:
+            return 0.0
+
+    # 3. Calculate Metrics
+    # Group by Store Code (Col 0)
+    
+    metrics = {} # {StoreCode: {'<5': 0, 'CWO': 0, 'NOH': 0}}
+
+    for index, row in df.iterrows():
+        # Skip header row if it exists (check if Col B is not a number)
+        if not str(row[1]).replace('.','',1).isdigit():
+            continue
+            
+        store_code = str(row[0]).strip()
+        if not store_code: continue
+        
+        if store_code not in metrics:
+            metrics[store_code] = {'<5': 0, 'CWO': 0, 'NOH': 0.0}
+
+        # Metric 1: <5 (Count rows where 0 < Col B < 5)
+        try:
+            val_b = to_float(row[1])
+            if 0 < val_b < 5:
+                metrics[store_code]['<5'] += 1
+        except: pass
+
+        # Metric 2: CWO (If Col J (Idx 9) == 'C', Sum Col AC (Idx 28))
+        try:
+            if len(row) > 28:
+                status_j = str(row[9]).strip().upper()
+                if status_j == 'C':
+                    metrics[store_code]['CWO'] += to_float(row[28])
+        except: pass
+
+        # Metric 3: NOH (If Col AB (Idx 27) < 0, Sum Col AB (Idx 27))
+        try:
+            if len(row) > 27:
+                val_ab = to_float(row[27])
+                if val_ab < 0:
+                    metrics[store_code]['NOH'] += val_ab
+        except: pass
+
+    # 4. Update Master Sheet
+    print("Connecting to target Master Sheet...")
+    gc = gspread.authorize(creds)
+    target_sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
+    target_ws = gc.open_by_key(target_sheet_id).worksheet('Store_Data') 
+    target_data = target_ws.get_all_values()
+    
+    cells_to_update = []
+    current_time = datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%d-%b-%Y %I:%M %p")
+    
+    target_map = {
+        "<5": "<5",
+        "CWO": "CWO",
+        "NOH": "NOH"
+    }
+
+    for index, row in enumerate(target_data):
+        if len(row) >= 2:
+            store_code = str(row[0]).strip()
+            cell_type = str(row[1]).strip()
+            
+            if cell_type in target_map and store_code in metrics:
+                metric_key = target_map[cell_type]
+                val = metrics[store_code][metric_key]
+                
+                # FTD Column (Col 3)
+                cells_to_update.append(gspread.Cell(row=index+1, col=3, value=val))
+                # MTD Column (Col 4) - User didn't specify MTD logic, duplicating FTD or leaving as is?
+                # Usually CSV snapshots imply current status, so FTD = MTD
+                cells_to_update.append(gspread.Cell(row=index+1, col=4, value=val))
+                
+                cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
+
+    if cells_to_update:
+        print(f"Updating {len(cells_to_update)//3} Article Sales records...")
+        target_ws.update_cells(cells_to_update)
+        print("Article Sales Update complete!")
+    else:
+        print("No matching rows found to update for Article Sales.")
+
+
+def update_vehicle_count_metric(creds):
+    """Fetches '#Of Vehicles' from 'Feb 26' tab, handling merged dates & offsets."""
+    print(f"\n--- Processing #Of Vehicles Metric ---")
+    gc = gspread.authorize(creds)
+    
+    # 1. Open Source Sheet
+    source_sheet_id = '1lYB9VXpKd60nl52_shy5F9UFemUy7V-HpKoz68XHLf4'
+    try:
+        # User specified sheet name "Feb 26"
+        source_ws = gc.open_by_key(source_sheet_id).worksheet('Feb 26')
+        source_data = source_ws.get_all_values()
+    except Exception as e:
+        print(f"Failed to open #Of Vehicles source sheet. Error: {e}")
+        return
+
+    if len(source_data) < 2: return
+
+    # 2. Determine Dates
+    ist_timezone = timezone(timedelta(hours=5, minutes=30))
+    yesterday = (datetime.now(ist_timezone) - timedelta(days=1)).date()
+    start_of_month = yesterday.replace(day=1)
+    
+    # Format dates to match sheet header (e.g., "11-Feb-26" or "1-Feb-26")
+    # %-d removes zero-padding on Linux/Mac, but might fail on Windows. 
+    # Using a safe approach to match "1-Feb-26" or "11-Feb-26"
+    yesterday_str = yesterday.strftime("%d-%b-%y").lstrip("0") 
+    print(f"Looking for header: {yesterday_str} for FTD")
+
+    # 3. Analyze Header Row (Row 1 / Index 0)
+    header_row = source_data[0]
+    
+    ftd_col_idx = -1
+    mtd_col_indices = [] # Tuples of (index+1, index+3)
+
+    for i, cell_val in enumerate(header_row):
+        val_str = str(cell_val).strip()
+        if not val_str: continue
+        
+        try:
+            # Parse date from header
+            # Try formats like "1-Feb-26"
+            header_date = datetime.strptime(val_str, "%d-%b-%y").date()
+            
+            # Check if date is in MTD range
+            if start_of_month <= header_date <= yesterday:
+                # Store the offsets for this date: (2nd col, 4th col) -> (idx+1, idx+3)
+                mtd_col_indices.append((i + 1, i + 3))
+            
+            # Check if date is FTD
+            if header_date == yesterday:
+                ftd_col_idx = i
+        except ValueError:
+            continue # Not a date column
+
+    if ftd_col_idx == -1:
+        print(f"Could not find header '{yesterday_str}' in Row 1.")
+        # We continue to process MTD if possible, or exit? 
+        # Usually better to exit FTD logic but allow MTD if we found past dates.
+        if not mtd_col_indices: return
+
+    # 4. Helper to clean numbers
+    def safe_float(val):
+        val_str = str(val).replace(',', '').strip()
+        if not val_str or val_str in ['-', 'NA', '#DIV/0!', '#N/A']: return 0.0
+        try:
+            return float(val_str)
+        except ValueError:
+            return 0.0
+
+    # 5. Process Rows
+    ftd_data = {} # {StoreCode: "Actual (Plan)"}
+    mtd_data = {} # {StoreCode: Total_Actual}
+
+    for row in source_data[2:]: # Assuming data starts from Row 3 (Index 2)
+        if len(row) < 4: continue
+        
+        store_code = str(row[0]).strip() # Column A
+        
+        # Get Plan from Column D (Index 3)
+        plan_val = safe_float(row[3]) 
+        
+        # --- Calculate FTD ---
+        ftd_actual = 0.0
+        if ftd_col_idx != -1 and len(row) > ftd_col_idx + 3:
+            val1 = safe_float(row[ftd_col_idx + 1]) # 2nd column
+            val2 = safe_float(row[ftd_col_idx + 3]) # 4th column
+            ftd_actual = val1 + val2
+            
+        # Format: "Actual (Plan)" -> e.g. "5 (12)"
+        # Converting to int for display cleanliness if they are whole numbers
+        ftd_str = f"{int(ftd_actual)} ({int(plan_val)})"
+        ftd_data[store_code] = ftd_str
+        
+        # --- Calculate MTD ---
+        mtd_total = 0.0
+        for (idx1, idx2) in mtd_col_indices:
+            if len(row) > idx2:
+                v1 = safe_float(row[idx1])
+                v2 = safe_float(row[idx2])
+                mtd_total += (v1 + v2)
+        
+        mtd_data[store_code] = mtd_total
+
+    # 6. Update Target Master Sheet
+    print("Connecting to target Master Sheet...")
+    target_sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
+    target_ws = gc.open_by_key(target_sheet_id).worksheet('Store_Data') 
+    target_data = target_ws.get_all_values()
+    
+    cells_to_update = []
+    current_time = datetime.now(ist_timezone).strftime("%d-%b-%Y %I:%M %p")
+    
+    for index, row in enumerate(target_data):
+        if len(row) >= 2: 
+            store_code = str(row[0]).strip() 
+            cell_type = str(row[1]).strip()
+            
+            if cell_type == "#Of Vehicles":
+                
+                ftd_res = ftd_data.get(store_code, "0 (0)")
+                mtd_res = mtd_data.get(store_code, 0)
+                
+                cells_to_update.append(gspread.Cell(row=index+1, col=3, value=ftd_res))
+                cells_to_update.append(gspread.Cell(row=index+1, col=4, value=mtd_res))
+                cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
+                
+    if cells_to_update:
+        print(f"Updating {len(cells_to_update)//3} records for #Of Vehicles...")
+        target_ws.update_cells(cells_to_update)
+        print("#Of Vehicles Update complete!")
+    else:
+        print("No matching rows found to update for #Of Vehicles.")
+
+def process_mb51_report(creds, file_path):
+    """Reads mb_51.xlsx, filters by Mvmt Type (101, 653, 252), and sums Value."""
+    print(f"\n--- Processing MB51 Report (GRN, Return, Refund) ---")
+    
+    try:
+        # Read Excel file (Assuming no header or standard header, accessing by index is safest)
+        df = pd.read_excel(file_path, header=None)
+    except Exception as e:
+        print(f"Failed to read mb_51.xlsx. Error: {e}")
+        return
+
+    # 1. Column Mapping (0-based Index)
+    # Col B (Idx 1) = Movement Type (101, 653, 252)
+    # Col F (Idx 5) = Amount / Value
+    # Col G (Idx 6) = Date (mm/dd/yyyy)
+    # Col P (Idx 15) = Store Code
+    
+    # 2. Clean Store Code (Col P / Idx 15)
+    # Force to string and remove decimals (e.g. 4702.0 -> "4702")
+    df[15] = df[15].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+    
+    # 3. Parse Date (Col G / Idx 6)
+    df[6] = pd.to_datetime(df[6], format='%m/%d/%Y', errors='coerce').dt.normalize()
+    
+    # 4. Clean Movement Type (Col B / Idx 1)
+    df[1] = df[1].astype(str).str.strip()
+
+    # 5. Clean Value (Col F / Idx 5)
+    df[5] = pd.to_numeric(df[5], errors='coerce').fillna(0.0)
+
+    # 6. Define Dates
+    ist_timezone = timezone(timedelta(hours=5, minutes=30))
+    yesterday = (datetime.now(ist_timezone) - timedelta(days=1)).date()
+    start_of_month = yesterday.replace(day=1)
+    
+    print(f"MB51: FTD for {yesterday} | MTD from {start_of_month}")
+
+    # 7. Initialize Data Structure
+    # {StoreCode: {'101': {'FTD': 0, 'MTD': 0}, '653': {...}, '252': {...}}}
+    store_metrics = {}
+
+    target_codes = ['101', '653', '252']
+
+    # 8. Process Rows
+    for index, row in df.iterrows():
+        # Skip rows with invalid dates
+        if pd.isna(row[6]): continue
+        
+        row_date = row[6].date()
+        store_code = row[15]
+        mvmt_type = row[1]
+        val = row[5]
+        
+        if mvmt_type in target_codes:
+            if store_code not in store_metrics:
+                store_metrics[store_code] = {
+                    '101': {'FTD': 0.0, 'MTD': 0.0},
+                    '653': {'FTD': 0.0, 'MTD': 0.0},
+                    '252': {'FTD': 0.0, 'MTD': 0.0}
+                }
+            
+            # MTD Calculation
+            if start_of_month <= row_date <= yesterday:
+                store_metrics[store_code][mvmt_type]['MTD'] += val
+            
+            # FTD Calculation
+            if row_date == yesterday:
+                store_metrics[store_code][mvmt_type]['FTD'] += val
+
+    # 9. Update Master Sheet
+    print("Connecting to target Master Sheet...")
+    gc = gspread.authorize(creds)
+    target_sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
+    target_ws = gc.open_by_key(target_sheet_id).worksheet('Store_Data') 
+    target_data = target_ws.get_all_values()
+    
+    cells_to_update = []
+    current_time = datetime.now(ist_timezone).strftime("%d-%b-%Y %I:%M %p")
+    
+    # Map Dashboard Metric Names to Movement Types
+    metric_map = {
+        "GRN Value": '101',
+        "Return Value - 653": '653',
+        "Refund Value - 252": '252'
+    }
+
+    for index, row in enumerate(target_data):
+        if len(row) >= 2: 
+            store_code = str(row[0]).strip() 
+            cell_type = str(row[1]).strip()
+            
+            if cell_type in metric_map and store_code in store_metrics:
+                code_key = metric_map[cell_type]
+                
+                ftd_val = store_metrics[store_code][code_key]['FTD']
+                mtd_val = store_metrics[store_code][code_key]['MTD']
+                
+                cells_to_update.append(gspread.Cell(row=index+1, col=3, value=ftd_val))
+                cells_to_update.append(gspread.Cell(row=index+1, col=4, value=mtd_val))
+                cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
+
+    if cells_to_update:
+        print(f"Updating {len(cells_to_update)//3} MB51 records...")
+        target_ws.update_cells(cells_to_update)
+        print("MB51 Update complete!")
+    else:
+        print("No matching rows found to update for MB51 metrics.")
+
+def process_near_expiry_report(creds, file_path):
+    """Reads near_expiry.XLSX and calculates Short Expire Value & Items."""
+    print(f"\n--- Processing Near Expiry Report ---")
+    
+    try:
+        # Read Excel file (no header assumed to access by index safely)
+        df = pd.read_excel(file_path, header=None)
+    except Exception as e:
+        print(f"Failed to read near_expiry.XLSX. Error: {e}")
+        return
+
+    # 1. Column Mapping (0-based Index)
+    # Col E (Idx 4) = Short Expire Items (Qty)
+    # Col F (Idx 5) = Short Expire Value (Amt)
+    # Col G (Idx 6) = Date (mm/dd/yyyy)
+    # Col P (Idx 15) = Store Code
+    
+    # 2. Clean Store Code (Col P / Idx 15)
+    df[15] = df[15].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+    
+    # 3. Parse Date (Col G / Idx 6)
+    # Using 'coerce' to handle header rows or bad data gracefully
+    df[6] = pd.to_datetime(df[6], format='%m/%d/%Y', errors='coerce').dt.normalize()
+    
+    # 4. Clean Numeric Columns
+    df[4] = pd.to_numeric(df[4], errors='coerce').fillna(0.0) # Items
+    df[5] = pd.to_numeric(df[5], errors='coerce').fillna(0.0) # Value
+
+    # 5. Define Dates
+    ist_timezone = timezone(timedelta(hours=5, minutes=30))
+    yesterday = (datetime.now(ist_timezone) - timedelta(days=1)).date()
+    start_of_month = yesterday.replace(day=1)
+    
+    print(f"Near Expiry: FTD for {yesterday} | MTD from {start_of_month}")
+
+    # 6. Initialize Data Structure
+    # {StoreCode: {'Value': {'FTD': 0, 'MTD': 0}, 'Items': {'FTD': 0, 'MTD': 0}}}
+    store_metrics = {}
+
+    # 7. Process Rows
+    for index, row in df.iterrows():
+        # Skip rows with invalid dates
+        if pd.isna(row[6]): continue
+        
+        row_date = row[6].date()
+        store_code = row[15]
+        
+        qty = row[4]
+        val = row[5]
+        
+        if store_code not in store_metrics:
+            store_metrics[store_code] = {
+                'Value': {'FTD': 0.0, 'MTD': 0.0},
+                'Items': {'FTD': 0.0, 'MTD': 0.0}
+            }
+        
+        # MTD Calculation
+        if start_of_month <= row_date <= yesterday:
+            store_metrics[store_code]['Value']['MTD'] += val
+            store_metrics[store_code]['Items']['MTD'] += qty
+        
+        # FTD Calculation
+        if row_date == yesterday:
+            store_metrics[store_code]['Value']['FTD'] += val
+            store_metrics[store_code]['Items']['FTD'] += qty
+
+    # 8. Update Master Sheet
+    print("Connecting to target Master Sheet...")
+    gc = gspread.authorize(creds)
+    target_sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
+    target_ws = gc.open_by_key(target_sheet_id).worksheet('Store_Data') 
+    target_data = target_ws.get_all_values()
+    
+    cells_to_update = []
+    current_time = datetime.now(ist_timezone).strftime("%d-%b-%Y %I:%M %p")
+    
+    # Map Dashboard Metric Names to our internal keys
+    metric_map = {
+        "Short Expire Value": 'Value',
+        "Short expire items": 'Items'
+    }
+
+    for index, row in enumerate(target_data):
+        if len(row) >= 2: 
+            store_code = str(row[0]).strip() 
+            cell_type = str(row[1]).strip()
+            
+            if cell_type in metric_map and store_code in store_metrics:
+                key = metric_map[cell_type]
+                
+                ftd_val = store_metrics[store_code][key]['FTD']
+                mtd_val = store_metrics[store_code][key]['MTD']
+                
+                cells_to_update.append(gspread.Cell(row=index+1, col=3, value=ftd_val))
+                cells_to_update.append(gspread.Cell(row=index+1, col=4, value=mtd_val))
+                cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
+
+    if cells_to_update:
+        print(f"Updating {len(cells_to_update)//3} Near Expiry records...")
+        target_ws.update_cells(cells_to_update)
+        print("Near Expiry Update complete!")
+    else:
+        print("No matching rows found to update for Near Expiry metrics.")
+
+def update_ninth_metric(creds):
+    """Fetches FTD (Matrix Lookup) and MTD (Col M) for 'Adhoc Vehicle' from 'Feb 26' tab."""
+    print(f"\n--- Processing Ninth Google Sheet (Adhoc Vehicle) ---")
+    gc = gspread.authorize(creds)
+    
+    # 1. Open Source Sheet
+    source_sheet_id = '1Q4Xn55p1ELvp1OpFYzcDuyAK7-_m6ZVGZdN-eThHJw0'
+    try:
+        # Targeting the specific tab named "Feb 26"
+        source_ws = gc.open_by_key(source_sheet_id).worksheet('Feb 26')
+        source_data = source_ws.get_all_values()
+    except Exception as e:
+        print(f"Failed to open 'Feb 26' tab. Error: {e}")
+        return
+
+    if len(source_data) < 2: return
+
+    # 2. Determine Dates
+    ist_timezone = timezone(timedelta(hours=5, minutes=30))
+    yesterday = (datetime.now(ist_timezone) - timedelta(days=1)).date()
+    
+    print(f"Adhoc Vehicle: Looking for column header '{yesterday.strftime('%m/%d/%Y')}'")
+
+    # 3. Find FTD Column in Row 1 (Index 0)
+    header_row = source_data[0]
+    ftd_col_idx = -1
+    
+    for i, val in enumerate(header_row):
+        val_str = str(val).strip()
+        if not val_str: continue
+        
+        try:
+            # Parse date mm/dd/yyyy
+            col_date = pd.to_datetime(val_str, format='%m/%d/%Y', errors='coerce').date()
+            if col_date == yesterday:
+                ftd_col_idx = i
+                break
+        except:
+            continue
+            
+    if ftd_col_idx == -1:
+        print(f"Could not find yesterday's date ({yesterday}) in the header row.")
+
+    # 4. Helper for numbers
+    def safe_float(val):
+        val_str = str(val).replace(',', '').strip()
+        if not val_str or val_str in ['-', 'NA', '#DIV/0!', '#N/A']: return 0.0
+        try:
+            return float(val_str)
+        except ValueError:
+            return 0.0
+
+    # 5. Extract Data
+    # Store Code = Col A (Idx 0)
+    # FTD = Dynamic Column
+    # MTD = Col M (Idx 12)
+    
+    metrics = {} # {StoreCode: {'FTD': 0, 'MTD': 0}}
+
+    for row in source_data[1:]: # Skip header
+        if len(row) < 1: continue
+        
+        # Clean Store Code (Col A)
+        store_code = str(row[0]).replace('.0', '').strip()
+        if not store_code: continue
+        
+        # FTD Value
+        ftd_val = 0.0
+        if ftd_col_idx != -1 and len(row) > ftd_col_idx:
+            ftd_val = safe_float(row[ftd_col_idx])
+            
+        # MTD Value (Column M / Index 12)
+        mtd_val = 0.0
+        if len(row) > 12:
+            mtd_val = safe_float(row[12])
+            
+        metrics[store_code] = {'FTD': ftd_val, 'MTD': mtd_val}
+
+    # 6. Update Target Master Sheet
+    print("Connecting to target Master Sheet...")
+    target_sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
+    target_ws = gc.open_by_key(target_sheet_id).worksheet('Store_Data') 
+    target_data = target_ws.get_all_values()
+    
+    cells_to_update = []
+    current_time = datetime.now(ist_timezone).strftime("%d-%b-%Y %I:%M %p")
+    
+    # METRIC NAME
+    metric_name = "Adhoc Vehicle" 
+
+    for index, row in enumerate(target_data):
+        if len(row) >= 2: 
+            store_code = str(row[0]).strip() 
+            cell_type = str(row[1]).strip()
+            
+            if cell_type == metric_name and store_code in metrics:
+                
+                ftd = metrics[store_code]['FTD']
+                mtd = metrics[store_code]['MTD']
+                
+                cells_to_update.append(gspread.Cell(row=index+1, col=3, value=ftd))
+                cells_to_update.append(gspread.Cell(row=index+1, col=4, value=mtd))
+                cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
+                
+    if cells_to_update:
+        print(f"Updating {len(cells_to_update)//3} Adhoc Vehicle records...")
+        target_ws.update_cells(cells_to_update)
+        print("Adhoc Vehicle Update complete!")
+    else:
+        print(f"No matching rows found for metric '{metric_name}'. Check the name in Master Sheet!")
+
+
+def update_veh_released_metric(creds):
+    """Fetches '#Of Veh Released <10am' by summing first 2 cols under the date."""
+    print(f"\n--- Processing #Of Veh Released <10am ---")
+    gc = gspread.authorize(creds)
+    
+    # 1. Open Source Sheet
+    source_sheet_id = '1eYd1U5ooBjdgjwL3g4wWnUocNgnhaH6defIccVtx4CI'
+    try:
+        # User specified sheet name "Feb 26"
+        source_ws = gc.open_by_key(source_sheet_id).worksheet('Feb 26')
+        source_data = source_ws.get_all_values()
+    except Exception as e:
+        print(f"Failed to open source sheet. Error: {e}")
+        return
+
+    if len(source_data) < 2: return
+
+    # 2. Determine Dates
+    ist_timezone = timezone(timedelta(hours=5, minutes=30))
+    yesterday = (datetime.now(ist_timezone) - timedelta(days=1)).date()
+    start_of_month = yesterday.replace(day=1)
+    
+    # Match header format: "1-Feb-26" or "11-Feb-26"
+    yesterday_str = yesterday.strftime("%d-%b-%y").lstrip("0") 
+    print(f"Looking for header: {yesterday_str}")
+
+    # 3. Analyze Header Row (Row 1 / Index 0)
+    header_row = source_data[0]
+    
+    ftd_col_idx = -1
+    mtd_col_indices = [] # List of tuples: (col_1_idx, col_2_idx)
+
+    for i, cell_val in enumerate(header_row):
+        val_str = str(cell_val).strip()
+        if not val_str: continue
+        
+        try:
+            # Parse date from header
+            header_date = datetime.strptime(val_str, "%d-%b-%y").date()
+            
+            # Check if date is in MTD range
+            if start_of_month <= header_date <= yesterday:
+                # We need the column under the date (i) and the one next to it (i+1)
+                # to cover "Till 9am" + "9am-10am"
+                mtd_col_indices.append((i, i + 1))
+            
+            # Check if date is FTD
+            if header_date == yesterday:
+                ftd_col_idx = i
+        except ValueError:
+            continue 
+
+    if ftd_col_idx == -1:
+        print(f"Could not find header '{yesterday_str}' in Row 1.")
+
+    # 4. Helper to clean numbers
+    def safe_float(val):
+        val_str = str(val).replace(',', '').strip()
+        if not val_str or val_str in ['-', 'NA', '#DIV/0!', '#N/A']: return 0.0
+        try:
+            return float(val_str)
+        except ValueError:
+            return 0.0
+
+    # 5. Process Rows
+    ftd_data = {} 
+    mtd_data = {} 
+
+    # Assuming data starts from Row 3 (Index 2) like previous vehicle sheet
+    for row in source_data[2:]: 
+        if len(row) < 1: continue
+        
+        store_code = str(row[0]).strip() # Column A
+        if not store_code: continue
+        
+        # --- Calculate FTD ---
+        ftd_val = 0.0
+        if ftd_col_idx != -1 and len(row) > ftd_col_idx + 1:
+            val1 = safe_float(row[ftd_col_idx])     # 1st col (Till 9am)
+            val2 = safe_float(row[ftd_col_idx + 1]) # 2nd col (9-10am)
+            ftd_val = val1 + val2
+            
+        ftd_data[store_code] = ftd_val
+        
+        # --- Calculate MTD ---
+        mtd_total = 0.0
+        for (idx1, idx2) in mtd_col_indices:
+            if len(row) > idx2:
+                v1 = safe_float(row[idx1])
+                v2 = safe_float(row[idx2])
+                mtd_total += (v1 + v2)
+        
+        mtd_data[store_code] = mtd_total
+
+    # 6. Update Target Master Sheet
+    print("Connecting to target Master Sheet...")
+    target_sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
+    target_ws = gc.open_by_key(target_sheet_id).worksheet('Store_Data') 
+    target_data = target_ws.get_all_values()
+    
+    cells_to_update = []
+    current_time = datetime.now(ist_timezone).strftime("%d-%b-%Y %I:%M %p")
+    
+    # Target Metric Name
+    metric_name = "#Of Veh Released <10am"
+
+    for index, row in enumerate(target_data):
+        if len(row) >= 2: 
+            store_code = str(row[0]).strip() 
+            cell_type = str(row[1]).strip()
+            
+            if cell_type == metric_name:
+                
+                ftd = ftd_data.get(store_code, 0)
+                mtd = mtd_data.get(store_code, 0)
+                
+                cells_to_update.append(gspread.Cell(row=index+1, col=3, value=ftd))
+                cells_to_update.append(gspread.Cell(row=index+1, col=4, value=mtd))
+                cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
+                
+    if cells_to_update:
+        print(f"Updating {len(cells_to_update)//3} records for {metric_name}...")
+        target_ws.update_cells(cells_to_update)
+        print("Update complete!")
+    else:
+        print(f"No matching rows found for metric '{metric_name}'.")
+
+def process_inventory_ageing(creds, file_path):
+    """Reads Inventory_Aeging.csv and calculates Claims, >180 Days, and Type 12 metrics."""
+    print(f"\n--- Processing Inventory Ageing Report ---")
+    
+    try:
+        # Read CSV (using latin1 to handle any special characters, low_memory=False for safety)
+        # header=None so we can reliably target columns by their exact index
+        df = pd.read_csv(file_path, encoding='latin1', low_memory=False, header=None)
+    except Exception as e:
+        print(f"Failed to read Inventory_Aeging.csv. Error: {e}")
+        return
+
+    # 1. Column Mapping (0-based Index)
+    # Col O (Idx 14) = Store Code
+    # Col P (Idx 15) = Category/Type (Targeting 7, 8, or 12)
+    # Col AC (Idx 28) = Ageing Days (Targeting > 180)
+    # Col AF (Idx 31) = Value to sum for Claims (7, 8, >180)
+    # Col AH (Idx 33) = Value to sum for Type 12
+    
+    # Check if the dataframe has enough columns to reach Col AH
+    if df.shape[1] <= 33:
+        print(f"Error: CSV only has {df.shape[1]} columns, expected at least 34 to reach Column AH.")
+        return
+
+    # 2. Clean and Standardize Columns
+    # Store Code (Col O / Idx 14): Force string, remove ".0", strip whitespace
+    df[14] = df[14].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+    
+    # Category/Type (Col P / Idx 15): Clean to string for exact matching ('7', '8', '12')
+    df[15] = df[15].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+    
+    # Numeric Columns: Convert to float, coercing errors to 0
+    df[28] = pd.to_numeric(df[28], errors='coerce').fillna(0.0) # Col AC
+    df[31] = pd.to_numeric(df[31], errors='coerce').fillna(0.0) # Col AF
+    df[33] = pd.to_numeric(df[33], errors='coerce').fillna(0.0) # Col AH (NEW)
+
+    # 3. Calculate the Metrics using Pandas Filtering & Grouping
+    
+    # Metric 1: Claims Regular Value (Col P == '7', Sum Col AF)
+    df_regular = df[df[15] == '7']
+    dict_regular = df_regular.groupby(14)[31].sum().to_dict()
+
+    # Metric 2: Claims RTV Value (Col P == '8', Sum Col AF)
+    df_rtv = df[df[15] == '8']
+    dict_rtv = df_rtv.groupby(14)[31].sum().to_dict()
+
+    # Metric 3: >180 Days Claims Inventory (Col P in ['7','8'] AND Col AC > 180, Sum Col AF)
+    df_180 = df[(df[15].isin(['7', '8'])) & (df[28] > 180)]
+    dict_180 = df_180.groupby(14)[31].sum().to_dict()
+
+    # Metric 4 (NEW): Col P == '12', Sum Col AH
+    df_12 = df[df[15] == '12']
+    dict_12 = df_12.groupby(14)[33].sum().to_dict()
+
+    # Combine into a unified dictionary for easy lookup
+    store_metrics = {}
+    
+    # Get all unique store codes from the 4 dictionaries
+    all_stores = set(dict_regular.keys()).union(set(dict_rtv.keys())).union(set(dict_180.keys())).union(set(dict_12.keys()))
+    
+    for store in all_stores:
+        if store == 'nan' or not store: continue
+        store_metrics[store] = {
+            "Claims Regular Value": dict_regular.get(store, 0.0),
+            "Claims RTV Value": dict_rtv.get(store, 0.0),
+            ">180 Days Claims Inventory": dict_180.get(store, 0.0),
+            
+            # ⚠️ RENAME THIS TO MATCH YOUR DASHBOARD METRIC NAME ⚠️
+            "Metric 12 Value": dict_12.get(store, 0.0) 
+        }
+
+    # 4. Update Target Master Sheet
+    print("Connecting to target Master Sheet...")
+    gc = gspread.authorize(creds)
+    target_sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
+    target_ws = gc.open_by_key(target_sheet_id).worksheet('Store_Data') 
+    target_data = target_ws.get_all_values()
+    
+    cells_to_update = []
+    ist_timezone = timezone(timedelta(hours=5, minutes=30))
+    current_time = datetime.now(ist_timezone).strftime("%d-%b-%Y %I:%M %p")
+    
+    # Make sure to update the placeholder name here as well if you change it above!
+    target_metric_names = ["Claims Regular Value", "Claims RTV Value", ">180 Days Claims Inventory", "Metric 12 Value"]
+
+    for index, row in enumerate(target_data):
+        if len(row) >= 2: 
+            store_code = str(row[0]).strip() 
+            cell_type = str(row[1]).strip()
+            
+            if cell_type in target_metric_names and store_code in store_metrics:
+                
+                # Fetch the calculated value
+                val = store_metrics[store_code].get(cell_type, 0.0)
+                
+                # Update FTD and MTD (Snapshots update both columns simultaneously)
+                cells_to_update.append(gspread.Cell(row=index+1, col=3, value=val))
+                cells_to_update.append(gspread.Cell(row=index+1, col=4, value=val))
+                cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
+
+    if cells_to_update:
+        print(f"Updating {len(cells_to_update)//3} Inventory Ageing records...")
+        target_ws.update_cells(cells_to_update)
+        print("Inventory Ageing Update complete!")
+    else:
+        print("No matching rows found to update for Inventory Ageing metrics.")
 
         
 def main():
@@ -1284,6 +2403,17 @@ def main():
     update_seventh_metric(creds)
     update_eighth_metric(creds)
     update_expense_metrics(creds)
+    update_osa_metric(creds)
+    update_expense_metrics(creds)
+    process_price_override(creds, csv_file)
+    update_qc_tpv_vd_metrics(creds)
+    process_article_sales_report(creds, sales_file)
+    update_vehicle_count_metric(creds)
+    process_mb51_report(creds, mb51_file)
+    process_near_expiry_report(creds, expiry_file)
+    update_ninth_metric(creds)
+    update_veh_released_metric(creds)
+    process_inventory_ageing(creds, ageing_file)
     
     # 2. Process Vehicle Stats (.XLSX) - NEW STEP
     # Reuse the download function but pass the specific filename
