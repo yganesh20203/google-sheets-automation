@@ -2389,54 +2389,80 @@ def process_inventory_ageing(creds, file_path):
     else:
         print("No matching rows found to update for Inventory Ageing metrics.")
 
-        
+
+
 def main():
     creds = authenticate_service_account()
     drive_service = build('drive', 'v3', credentials=creds)
 
-    # 1. Pull data from all secondary APIs
-    update_damage_metric(creds)
-    update_third_metric(creds)
-    update_fourth_metric(creds)
-    update_fifth_metric(creds)
-    update_sixth_metric(creds)
-    update_seventh_metric(creds)
-    update_eighth_metric(creds)
-    update_expense_metrics(creds)
-    update_osa_metric(creds)
-    update_expense_metrics(creds)
-    process_price_override(creds, csv_file)
-    update_qc_tpv_vd_metrics(creds)
-    process_article_sales_report(creds, sales_file)
-    update_vehicle_count_metric(creds)
-    process_mb51_report(creds, mb51_file)
-    process_near_expiry_report(creds, expiry_file)
-    update_ninth_metric(creds)
-    update_veh_released_metric(creds)
-    process_inventory_ageing(creds, ageing_file)
-    
-    # 2. Process Vehicle Stats (.XLSX) - NEW STEP
-    # Reuse the download function but pass the specific filename
-    vehicle_file = download_from_drive(drive_service, filename='vehicle_stats.XLSX')
-    if vehicle_file:
-        try:
-            process_vehicle_stats(creds, vehicle_file)
-        finally:
-            if os.path.exists(vehicle_file):
-                os.remove(vehicle_file)
+    print("--- Starting Dashboard Update Pipeline ---")
 
-    # 3. Process Sales KPI (.xlsb)
-    # Note: Using default filename 'Daily_KPI_Processing.xlsb'
-    kpi_file = download_from_drive(drive_service) 
-    if kpi_file:
+    # --- HELPER 1: Run standard sheet functions safely with a pause ---
+    def run_safely(func, *args, name="Task"):
         try:
-            process_and_update_sheet(creds, kpi_file)
+            print(f"\nStarting {name}...")
+            func(*args)
+        except Exception as e:
+            print(f"Error in {name}: {e}")
         finally:
-            if os.path.exists(kpi_file):
-                os.remove(kpi_file)
+            print("Pausing for 15 seconds to respect API quota...")
+            time.sleep(15)
+
+    # 1. Pull data from all standard Google Sheets
+    run_safely(update_damage_metric, creds, name="Damage Metric")
+    run_safely(update_third_metric, creds, name="Third Metric")
+    run_safely(update_fourth_metric, creds, name="Fourth Metric")
+    run_safely(update_fifth_metric, creds, name="Fifth Metric")
+    run_safely(update_sixth_metric, creds, name="Sixth Metric")
+    run_safely(update_seventh_metric, creds, name="Seventh Metric")
+    run_safely(update_eighth_metric, creds, name="Eighth Metric")
+    run_safely(update_expense_metrics, creds, name="Expense Metrics")
+    run_safely(update_osa_metric, creds, name="OSA Metric")
+    run_safely(update_qc_tpv_vd_metrics, creds, name="QC/TPV/VD Metrics")
+    run_safely(update_vehicle_count_metric, creds, name="Vehicle Count Metric")
+    run_safely(update_ninth_metric, creds, name="Adhoc Vehicle Metric")
+    run_safely(update_veh_released_metric, creds, name="Veh Released <10am Metric")
+
+    # --- HELPER 2: Download, Process, and Clean Up Drive Files ---
+    files_to_process = [
+        ('PriceOverride.csv', process_price_override, "Price Override"),
+        ('ArticleSalesReport.csv', process_article_sales_report, "Article Sales Report"),
+        ('mb_51.xlsx', process_mb51_report, "MB51 Report"),
+        ('near_expiry.XLSX', process_near_expiry_report, "Near Expiry Report"),
+        ('Inventory_Aeging.csv', process_inventory_ageing, "Inventory Ageing"),
+        ('vehicle_stats.XLSX', process_vehicle_stats, "Vehicle Stats"),
+        ('Daily_KPI_Processing.xlsb', process_and_update_sheet, "Sales KPI")
+    ]
+
+    # 2. Process all Drive Files sequentially
+    for filename, func, name in files_to_process:
+        downloaded_file = None
+        try:
+            print(f"\nDownloading and starting {name}...")
+            downloaded_file = download_from_drive(drive_service, filename=filename)
+            
+            if downloaded_file:
+                func(creds, downloaded_file)
+            else:
+                print(f"Could not find or download {filename}")
                 
-    # 4. CALCULATE ALL DERIVED METRICS LAST!
-    calculate_derived_metrics(creds)
+        except Exception as e:
+            print(f"Error in {name}: {e}")
+        finally:
+            # Delete the file to save local space
+            if downloaded_file and os.path.exists(downloaded_file):
+                os.remove(downloaded_file)
+            print("Pausing for 15 seconds to respect API quota...")
+            time.sleep(15)
+
+    # 3. Calculate Derived Metrics (No pause needed after this, it's the last step!)
+    try:
+        print("\nCalculating Derived Metrics...")
+        calculate_derived_metrics(creds)
+    except Exception as e:
+        print(f"Error in Derived Metrics: {e}")
+
+    print("\n--- Pipeline Complete! ---")
 
 if __name__ == '__main__':
     main()
