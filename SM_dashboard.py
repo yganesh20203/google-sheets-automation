@@ -567,7 +567,7 @@ def update_fifth_metric(creds):
 
 def calculate_derived_metrics(creds):
     """Calculates all percentages and ratios from the Master Sheet's updated values."""
-    print("\n--- Calculating Derived Metrics (%, LPB, ABV, TPC) ---")
+    print("\n--- Calculating Derived Metrics (%, LPB, ABV, TPC, OTGS) ---")
     gc = gspread.authorize(creds)
     
     target_sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
@@ -589,12 +589,12 @@ def calculate_derived_metrics(creds):
             if not store_code: continue
             if store_code not in store_data: store_data[store_code] = {}
             
-            # Safely convert FTD and MTD to floats
+            # Safely convert FTD and MTD to floats (handles commas and existing % signs)
             try:
-                ftd = float(str(row[2]).replace(',', '').strip() or 0)
+                ftd = float(str(row[2]).replace(',', '').replace('%', '').strip() or 0)
             except: ftd = 0.0
             try:
-                mtd = float(str(row[3]).replace(',', '').strip() or 0)
+                mtd = float(str(row[3]).replace(',', '').replace('%', '').strip() or 0)
             except: mtd = 0.0
             
             store_data[store_code][cell_type] = {'FTD': ftd, 'MTD': mtd}
@@ -682,6 +682,7 @@ def calculate_derived_metrics(creds):
         print("Derived Metrics Update complete!")
     else:
         print("No derived metrics to update.")
+
 
 def update_seventh_metric(creds):
     """Fetches 'Tonnage Plan' and 'Order Plan' data, matching dates like '1-Feb'."""
@@ -1597,22 +1598,25 @@ def process_price_override(creds, file_path):
 
 
 def process_article_sales_report(creds, file_path):
-    """Reads ArticleSalesReport.csv and calculates <5, CWO, and NOH metrics."""
+    """Reads ArticleSalesReport.csv and calculates <5 (Col AB), CWO, and NOH metrics."""
     print(f"\n--- Processing Article Sales Report (<5, CWO, NOH) ---")
     
     try:
         # Read CSV with latin1 to handle potential special characters
-        df = pd.read_csv(file_path, encoding='latin1', header=None)
+        df = pd.read_csv(file_path, encoding='latin1', header=None, low_memory=False)
     except Exception as e:
         print(f"Failed to read ArticleSalesReport.csv. Error: {e}")
         return
 
-    # 1. Clean Store Code (Assuming Column A / Index 0 based on logic)
-    # If user meant Col B for store, Col B < 5 check would fail. 
-    # Proceeding with Col A = Store, Col B = Metric.
-    df[0] = df[0].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+    # 1. Define Column Indices (0-based)
+    STORE_COL = 1        # Column B (Store Code)
+    CWO_STATUS_COL = 9   # Column J (Status 'C')
+    NOH_AND_QTY_COL = 27 # Column AB (Used for both <5 count and NOH sum)
+    CWO_VAL_COL = 28     # Column AC (Value to sum for CWO)
+
+    # 2. Clean Store Code (Column B / Index 1)
+    df[STORE_COL] = df[STORE_COL].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
     
-    # 2. Define Helper for Numeric Conversion
     def to_float(val):
         try:
             return float(str(val).replace(',', '').strip())
@@ -1620,45 +1624,42 @@ def process_article_sales_report(creds, file_path):
             return 0.0
 
     # 3. Calculate Metrics
-    # Group by Store Code (Col 0)
-    
-    metrics = {} # {StoreCode: {'<5': 0, 'CWO': 0, 'NOH': 0}}
+    metrics = {} # {StoreCode: {'<5': 0, 'CWO': 0.0, 'NOH': 0.0}}
 
     for index, row in df.iterrows():
-        # Skip header row if it exists (check if Col B is not a number)
-        if not str(row[1]).replace('.','',1).isdigit():
+        store_code = str(row[STORE_COL]).strip()
+        
+        # Skip headers or empty store codes
+        if not store_code or store_code == 'nan' or store_code.lower() in ['store', 'store code', 'site']: 
             continue
-            
-        store_code = str(row[0]).strip()
-        if not store_code: continue
         
         if store_code not in metrics:
-            metrics[store_code] = {'<5': 0, 'CWO': 0, 'NOH': 0.0}
+            metrics[store_code] = {'<5': 0, 'CWO': 0.0, 'NOH': 0.0}
 
-        # Metric 1: <5 (Count rows where 0 < Col B < 5)
+        # --- Metric 1: <5 (Count rows where 0 < Col AB < 5) ---
+        # --- Metric 3: NOH (If Col AB < 0, Sum Col AB) ---
         try:
-            val_b = to_float(row[1])
-            if 0 < val_b < 5:
-                metrics[store_code]['<5'] += 1
-        except: pass
-
-        # Metric 2: CWO (If Col J (Idx 9) == 'C', Sum Col AC (Idx 28))
-        try:
-            if len(row) > 28:
-                status_j = str(row[9]).strip().upper()
-                if status_j == 'C':
-                    metrics[store_code]['CWO'] += to_float(row[28])
-        except: pass
-
-        # Metric 3: NOH (If Col AB (Idx 27) < 0, Sum Col AB (Idx 27))
-        try:
-            if len(row) > 27:
-                val_ab = to_float(row[27])
+            if len(row) > NOH_AND_QTY_COL:
+                val_ab = to_float(row[NOH_AND_QTY_COL])
+                
+                # Check for <5 Metric
+                if 0 < val_ab < 5:
+                    metrics[store_code]['<5'] += 1
+                    
+                # Check for NOH Metric
                 if val_ab < 0:
                     metrics[store_code]['NOH'] += val_ab
         except: pass
 
-    # 4. Update Master Sheet
+        # --- Metric 2: CWO (If Col J == 'C', Sum Col AC) ---
+        try:
+            if len(row) > CWO_VAL_COL:
+                status_j = str(row[CWO_STATUS_COL]).strip().upper()
+                if status_j == 'C':
+                    metrics[store_code]['CWO'] += to_float(row[CWO_VAL_COL])
+        except: pass
+
+    # 4. Update Target Master Sheet
     print("Connecting to target Master Sheet...")
     gc = gspread.authorize(creds)
     target_sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
@@ -1666,7 +1667,8 @@ def process_article_sales_report(creds, file_path):
     target_data = target_ws.get_all_values()
     
     cells_to_update = []
-    current_time = datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%d-%b-%Y %I:%M %p")
+    ist_timezone = timezone(timedelta(hours=5, minutes=30))
+    current_time = datetime.now(ist_timezone).strftime("%d-%b-%Y %I:%M %p")
     
     target_map = {
         "<5": "<5",
@@ -1683,12 +1685,9 @@ def process_article_sales_report(creds, file_path):
                 metric_key = target_map[cell_type]
                 val = metrics[store_code][metric_key]
                 
-                # FTD Column (Col 3)
+                # FTD and MTD Columns (Cols 3 and 4)
                 cells_to_update.append(gspread.Cell(row=index+1, col=3, value=val))
-                # MTD Column (Col 4) - User didn't specify MTD logic, duplicating FTD or leaving as is?
-                # Usually CSV snapshots imply current status, so FTD = MTD
                 cells_to_update.append(gspread.Cell(row=index+1, col=4, value=val))
-                
                 cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
 
     if cells_to_update:
@@ -1697,7 +1696,6 @@ def process_article_sales_report(creds, file_path):
         print("Article Sales Update complete!")
     else:
         print("No matching rows found to update for Article Sales.")
-
 
 def update_vehicle_count_metric(creds):
     """Fetches '#Of Vehicles' from 'Feb 26' tab, handling merged dates & offsets."""
@@ -2351,7 +2349,7 @@ def process_inventory_ageing(creds, file_path):
             ">180 Days Claims Inventory": dict_180.get(store, 0.0),
             
             # ⚠️ RENAME THIS TO MATCH YOUR DASHBOARD METRIC NAME ⚠️
-            "Metric 12 Value": dict_12.get(store, 0.0) 
+            "Dual MRP Value": dict_12.get(store, 0.0) 
         }
 
     # 4. Update Target Master Sheet
@@ -2366,7 +2364,7 @@ def process_inventory_ageing(creds, file_path):
     current_time = datetime.now(ist_timezone).strftime("%d-%b-%Y %I:%M %p")
     
     # Make sure to update the placeholder name here as well if you change it above!
-    target_metric_names = ["Claims Regular Value", "Claims RTV Value", ">180 Days Claims Inventory", "Metric 12 Value"]
+    target_metric_names = ["Claims Regular Value", "Claims RTV Value", ">180 Days Claims Inventory", "Metric 12 Value","Dual MRP Value"]
 
     for index, row in enumerate(target_data):
         if len(row) >= 2: 
