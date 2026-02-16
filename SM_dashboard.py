@@ -2309,73 +2309,80 @@ def process_near_expiry_report(creds, file_path):
     else:
         print("No changes detected in Near Expiry metrics.")
 
-
-def process_near_expiry_report(creds, file_path):
-    """Reads near_expiry.XLSX and updates dashboard ONLY if changed."""
-    print(f"\n--- Processing Near Expiry Report ---")
+def update_ninth_metric(creds):
+    """Fetches 'Adhoc Vehicle' and updates dashboard ONLY if changed."""
+    print(f"\n--- Processing Ninth Google Sheet (Adhoc Vehicle) ---")
+    gc = gspread.authorize(creds)
     
+    # 1. Open Source Sheet
+    source_sheet_id = '1Q4Xn55p1ELvp1OpFYzcDuyAK7-_m6ZVGZdN-eThHJw0'
     try:
-        # Read Excel file (no header assumed to access by index safely)
-        df = pd.read_excel(file_path, header=None)
+        source_ws = gc.open_by_key(source_sheet_id).worksheet('Feb 26')
+        source_data = source_ws.get_all_values()
     except Exception as e:
-        print(f"Failed to read near_expiry.XLSX. Error: {e}")
+        print(f"Failed to open 'Feb 26' tab. Error: {e}")
         return
 
-    # 1. Column Mapping (0-based Index)
-    # Col E (Idx 4) = Short Expire Items (Qty)
-    # Col F (Idx 5) = Short Expire Value (Amt)
-    # Col G (Idx 6) = Date (mm/dd/yyyy)
-    # Col P (Idx 15) = Store Code
-    
-    # 2. Clean Store Code (Col P / Idx 15)
-    df[15] = df[15].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
-    
-    # 3. Parse Date (Col G / Idx 6)
-    df[6] = pd.to_datetime(df[6], format='%m/%d/%Y', errors='coerce').dt.normalize()
-    
-    # 4. Clean Numeric Columns
-    df[4] = pd.to_numeric(df[4], errors='coerce').fillna(0.0) # Items
-    df[5] = pd.to_numeric(df[5], errors='coerce').fillna(0.0) # Value
+    if len(source_data) < 2: return
 
-    # 5. Define Dates
+    # 2. Determine Dates
     ist_timezone = timezone(timedelta(hours=5, minutes=30))
     yesterday = (datetime.now(ist_timezone) - timedelta(days=1)).date()
-    start_of_month = yesterday.replace(day=1)
     
-    print(f"Near Expiry: FTD for {yesterday} | MTD from {start_of_month}")
+    print(f"Adhoc Vehicle: Looking for column header '{yesterday.strftime('%m/%d/%Y')}'")
 
-    # 6. Initialize Data Structure
-    store_metrics = {}
+    # 3. Find FTD Column in Row 1 (Index 0)
+    header_row = source_data[0]
+    ftd_col_idx = -1
+    
+    for i, val in enumerate(header_row):
+        val_str = str(val).strip()
+        if not val_str: continue
+        
+        try:
+            # Parse date mm/dd/yyyy
+            col_date = pd.to_datetime(val_str, format='%m/%d/%Y', errors='coerce').date()
+            if col_date == yesterday:
+                ftd_col_idx = i
+                break
+        except:
+            continue
+            
+    if ftd_col_idx == -1:
+        print(f"Could not find yesterday's date ({yesterday}) in the header row.")
 
-    # 7. Process Rows
-    for index, row in df.iterrows():
-        if pd.isna(row[6]): continue
-        
-        row_date = row[6].date()
-        store_code = row[15]
-        
-        qty = row[4]
-        val = row[5]
-        
-        if store_code not in store_metrics:
-            store_metrics[store_code] = {
-                'Value': {'FTD': 0.0, 'MTD': 0.0},
-                'Items': {'FTD': 0.0, 'MTD': 0.0}
-            }
-        
-        # MTD Calculation
-        if start_of_month <= row_date <= yesterday:
-            store_metrics[store_code]['Value']['MTD'] += val
-            store_metrics[store_code]['Items']['MTD'] += qty
-        
-        # FTD Calculation
-        if row_date == yesterday:
-            store_metrics[store_code]['Value']['FTD'] += val
-            store_metrics[store_code]['Items']['FTD'] += qty
+    # 4. Helper for numbers
+    def safe_float(val):
+        val_str = str(val).replace(',', '').strip()
+        if not val_str or val_str in ['-', 'NA', '#DIV/0!', '#N/A']: return 0.0
+        try:
+            return float(val_str)
+        except ValueError:
+            return 0.0
 
-    # 8. Update Master Sheet (With Change Detection)
+    # 5. Extract Data
+    metrics = {} # {StoreCode: {'FTD': 0, 'MTD': 0}}
+
+    for row in source_data[1:]: # Skip header
+        if len(row) < 1: continue
+        
+        store_code = str(row[0]).replace('.0', '').strip()
+        if not store_code: continue
+        
+        # FTD Value
+        ftd_val = 0.0
+        if ftd_col_idx != -1 and len(row) > ftd_col_idx:
+            ftd_val = safe_float(row[ftd_col_idx])
+            
+        # MTD Value (Column M / Index 12)
+        mtd_val = 0.0
+        if len(row) > 12:
+            mtd_val = safe_float(row[12])
+            
+        metrics[store_code] = {'FTD': ftd_val, 'MTD': mtd_val}
+
+    # 6. Update Target Master Sheet (With Change Detection)
     print("Connecting to target Master Sheet...")
-    gc = gspread.authorize(creds)
     target_sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
     target_ws = gc.open_by_key(target_sheet_id).worksheet('Store_Data') 
     target_data = target_ws.get_all_values()
@@ -2384,28 +2391,20 @@ def process_near_expiry_report(creds, file_path):
     current_time = datetime.now(ist_timezone).strftime("%d-%b-%Y %I:%M %p")
     updates_count = 0
     
-    # Map Dashboard Metric Names to our internal keys
-    metric_map = {
-        "Short Expire Value": 'Value',
-        "Short expire items": 'Items'
-    }
+    metric_name = "Adhoc Vehicle" 
 
     for index, row in enumerate(target_data):
         if len(row) >= 2: 
             store_code = str(row[0]).strip() 
             cell_type = str(row[1]).strip()
             
-            if cell_type in metric_map:
-                key = metric_map[cell_type]
+            if cell_type == metric_name and store_code in metrics:
                 
                 # A. Get NEW values
-                new_ftd = 0.0
-                new_mtd = 0.0
-                if store_code in store_metrics:
-                    new_ftd = store_metrics[store_code][key]['FTD']
-                    new_mtd = store_metrics[store_code][key]['MTD']
+                new_ftd = metrics[store_code]['FTD']
+                new_mtd = metrics[store_code]['MTD']
                 
-                # B. Get OLD values (Safely)
+                # B. Get OLD values
                 try:
                     old_ftd = float(str(row[2]).replace(',', '').strip() or 0)
                 except: old_ftd = 0.0
@@ -2417,17 +2416,16 @@ def process_near_expiry_report(creds, file_path):
                 if abs(new_ftd - old_ftd) > 0.001 or abs(new_mtd - old_mtd) > 0.001:
                     updates_count += 1
                     
-                    # Queue Updates
                     cells_to_update.append(gspread.Cell(row=index+1, col=3, value=new_ftd))
                     cells_to_update.append(gspread.Cell(row=index+1, col=4, value=new_mtd))
                     cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
-
+                
     if cells_to_update:
         print(f"Detected changes in {updates_count} rows. Updating Google Sheets...")
         target_ws.update_cells(cells_to_update)
-        print("Near Expiry Update complete!")
+        print("Adhoc Vehicle Update complete!")
     else:
-        print("No changes detected in Near Expiry metrics.")
+        print(f"No changes detected in {metric_name}.")
 
 def update_veh_released_metric(creds):
     """Fetches '#Of Veh Released <10am' and updates dashboard ONLY if changed."""
