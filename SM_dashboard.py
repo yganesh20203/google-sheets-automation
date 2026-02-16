@@ -2082,7 +2082,7 @@ def process_mb51_report(creds, file_path):
     print(f"\n--- Processing MB51 Report (GRN, Return, Refund) ---")
     
     try:
-        # Read Excel file (Assuming no header or standard header, accessing by index is safest)
+        # Read Excel file
         df = pd.read_excel(file_path, header=None)
     except Exception as e:
         print(f"Failed to read mb_51.xlsx. Error: {e}")
@@ -2091,12 +2091,14 @@ def process_mb51_report(creds, file_path):
     # 1. Column Mapping (0-based Index)
     # Col B (Idx 1) = Movement Type (101, 653, 252)
     # Col F (Idx 5) = Amount / Value
-    # Col G (Idx 6) = Date (mm/dd/yyyy)
-    # Col P (Idx 15) = Store Code
+    # Col G (Idx 6) = Date (Posting Date)
+    # Col N (Idx 13) = Store Code <--- FIXED THIS (Column N = 13)
     
-    # 2. Clean Store Code (Col P / Idx 15)
+    STORE_COL_IDX = 13
+
+    # 2. Clean Store Code (Col N / Idx 13)
     # Force to string and remove decimals (e.g. 4702.0 -> "4702")
-    df[15] = df[15].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+    df[STORE_COL_IDX] = df[STORE_COL_IDX].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
     
     # 3. Parse Date (Col G / Idx 6)
     df[6] = pd.to_datetime(df[6], format='%m/%d/%Y', errors='coerce').dt.normalize()
@@ -2115,18 +2117,16 @@ def process_mb51_report(creds, file_path):
     print(f"MB51: FTD for {yesterday} | MTD from {start_of_month}")
 
     # 7. Initialize Data Structure
-    # {StoreCode: {'101': {'FTD': 0, 'MTD': 0}, '653': {...}, '252': {...}}}
     store_metrics = {}
-
     target_codes = ['101', '653', '252']
 
     # 8. Process Rows
     for index, row in df.iterrows():
-        # Skip rows with invalid dates
+        # Skip rows with invalid dates (like the header row)
         if pd.isna(row[6]): continue
         
         row_date = row[6].date()
-        store_code = row[15]
+        store_code = row[STORE_COL_IDX] # Using the fixed index (13)
         mvmt_type = row[1]
         val = row[5]
         
@@ -2172,14 +2172,14 @@ def process_mb51_report(creds, file_path):
             if cell_type in metric_map:
                 code_key = metric_map[cell_type]
                 
-                # A. Get NEW Values (Default 0 if not in CSV)
+                # A. Get NEW Values
                 new_ftd = 0.0
                 new_mtd = 0.0
                 if store_code in store_metrics:
                     new_ftd = store_metrics[store_code][code_key]['FTD']
                     new_mtd = store_metrics[store_code][code_key]['MTD']
                 
-                # B. Get OLD Values (Safely)
+                # B. Get OLD Values
                 try:
                     old_ftd = float(str(row[2]).replace(',', '').strip() or 0)
                 except: old_ftd = 0.0
@@ -2202,6 +2202,8 @@ def process_mb51_report(creds, file_path):
         print("MB51 Update complete!")
     else:
         print("No changes detected in MB51 metrics.")
+
+
 
 
 def process_near_expiry_report(creds, file_path):
