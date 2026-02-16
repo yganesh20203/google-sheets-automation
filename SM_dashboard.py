@@ -146,7 +146,7 @@ def process_and_update_sheet(creds, xlsb_path):
         print("No matching rows found to update for Sales KPIs.")
 
 def update_damage_metric(creds):
-    """Fetches Damage data and updates dashboard ONLY if data has changed."""
+    """Fetches Damage data and updates dashboard ONLY if changed."""
     print(f"\n--- Processing Secondary Google Sheet Data (FTD & MTD) ---")
     gc = gspread.authorize(creds)
     
@@ -171,19 +171,33 @@ def update_damage_metric(creds):
     
     print(f"Calculating FTD for {yesterday} and MTD from {start_of_month} to {yesterday}")
     
-    # --- Date Fixes ---
-    pd_yesterday = pd.to_datetime(yesterday)
-    pd_start_of_month = pd.to_datetime(start_of_month)
+    # --- DATE FIX: Robust Parsing ---
+    # Convert Column A (Index 0) to string first to handle any mixed types
+    df_source[0] = df_source[0].astype(str).str.strip()
+
+    # Force pandas to convert to datetime, handling errors gracefully
+    # We use dayfirst=False because you said format is mm/dd/yyyy
+    df_source[0] = pd.to_datetime(df_source[0], format='%m/%d/%Y', errors='coerce').dt.normalize()
     
-    df_source[0] = pd.to_datetime(df_source[0], errors='coerce').dt.normalize()
+    # Drop rows where the date conversion failed (like headers or empty rows)
     df_source = df_source.dropna(subset=[0])
+    
+    # Convert comparison variables to Timestamp for matching
+    pd_yesterday = pd.to_datetime(yesterday).normalize()
+    pd_start_of_month = pd.to_datetime(start_of_month).normalize()
     
     # Create Filtered DataFrames
     df_ftd = df_source[df_source[0] == pd_yesterday].copy()
     df_mtd = df_source[(df_source[0] >= pd_start_of_month) & (df_source[0] <= pd_yesterday)].copy()
     
+    # Debug print to see what's happening if it fails again
+    print(f"Found {len(df_source)} total valid rows.")
+    print(f"Found {len(df_ftd)} FTD rows and {len(df_mtd)} MTD rows.")
+
     if df_mtd.empty:
-        print("No MTD data found for this month.")
+        print("No MTD data found for this month even after date fix.")
+        # Optional: Print sample dates to diagnose format if it still fails
+        # print("Sample dates from sheet:", df_source[0].head().tolist())
         return
         
     # 3. Clean and Map Columns
