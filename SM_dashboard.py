@@ -171,18 +171,22 @@ def update_damage_metric(creds):
     
     print(f"Calculating FTD for {yesterday} and MTD from {start_of_month} to {yesterday}")
     
-    # --- DATE FIX: Robust Parsing ---
-    # Convert Column A (Index 0) to string first to handle any mixed types
+    # --- DATE FIX: Robust Parsing for Column A (Index 0) ---
+    # Convert to string and strip whitespace
     df_source[0] = df_source[0].astype(str).str.strip()
-
-    # Force pandas to convert to datetime, handling errors gracefully
-    # We use dayfirst=False because you said format is mm/dd/yyyy
-    df_source[0] = pd.to_datetime(df_source[0], format='%m/%d/%Y', errors='coerce').dt.normalize()
     
-    # Drop rows where the date conversion failed (like headers or empty rows)
+    # Coerce errors -> Turns text headers into NaT (Not a Time) so we can drop them
+    # This handles mm/dd/yyyy, yyyy-mm-dd, etc. automatically
+    df_source[0] = pd.to_datetime(df_source[0], errors='coerce').dt.normalize()
+    
+    # Drop rows where dates are invalid
     df_source = df_source.dropna(subset=[0])
-    
-    # Convert comparison variables to Timestamp for matching
+
+    # --- STORE CODE: Column B (Index 1) ---
+    # As requested: Read directly, just ensure it's a string and strip whitespace
+    df_source[1] = df_source[1].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+
+    # Convert comparison variables
     pd_yesterday = pd.to_datetime(yesterday).normalize()
     pd_start_of_month = pd.to_datetime(start_of_month).normalize()
     
@@ -190,17 +194,14 @@ def update_damage_metric(creds):
     df_ftd = df_source[df_source[0] == pd_yesterday].copy()
     df_mtd = df_source[(df_source[0] >= pd_start_of_month) & (df_source[0] <= pd_yesterday)].copy()
     
-    # Debug print to see what's happening if it fails again
-    print(f"Found {len(df_source)} total valid rows.")
+    print(f"Found {len(df_source)} valid date rows.")
     print(f"Found {len(df_ftd)} FTD rows and {len(df_mtd)} MTD rows.")
 
     if df_mtd.empty:
-        print("No MTD data found for this month even after date fix.")
-        # Optional: Print sample dates to diagnose format if it still fails
-        # print("Sample dates from sheet:", df_source[0].head().tolist())
+        print("No MTD data found. Check if dates in Sheet match the target range.")
         return
         
-    # 3. Clean and Map Columns
+    # 3. Clean and Map Columns (Summing E, F, G -> Indices 4, 5, 6)
     sheet_metric_mapping = {
         "DT(Damage)": 4,    # Column E
         "DD(Expiry)": 5,    # Column F 
@@ -211,7 +212,6 @@ def update_damage_metric(creds):
     # Force Numeric
     for df in [df_ftd, df_mtd]:
         if not df.empty:
-            df[1] = df[1].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
             for col_idx in cols_to_sum:
                 if col_idx in df.columns: 
                     df[col_idx] = pd.to_numeric(df[col_idx], errors='coerce').fillna(0)
@@ -264,7 +264,7 @@ def update_damage_metric(creds):
     if cells_to_update:
         print(f"Detected changes in {updates_count} rows. Updating Google Sheets...")
         target_ws.update_cells(cells_to_update)
-        print("Secondary Sheet Update complete!")
+        print("Damage Metric Update complete!")
     else:
         print("No changes detected in Damage/Expiry/Shrink data.")
 
