@@ -79,33 +79,30 @@ def download_file(file_id, output_path):
         print(f"Error downloading {file_id}: {e}")
         return False
 
-def get_sales_team_ids():
+
+def get_sales_team_ids_from_csv(con):
+    """Fetches valid Sales Team IDs from the local NSU_master.csv file."""
     valid_ids = set()
-    print(">>> Fetching Sales Team Data from Google Sheets...")
+    print(">>> Fetching Sales Team Data from NSU_master.csv...")
     try:
-        meta = sheets_service.spreadsheets().get(spreadsheetId=NSU_SPREADSHEET_ID).execute()
-        sheets_info = meta.get('sheets', [])
-        for sheet in sheets_info:
-            gid = sheet['properties']['sheetId']
-            title = sheet['properties']['title']
-            if gid in NSU_CONFIG:
-                col_letter = NSU_CONFIG[gid]
-                range_name = f"'{title}'!{col_letter}:{col_letter}"
-                try:
-                    result = sheets_service.spreadsheets().values().get(
-                        spreadsheetId=NSU_SPREADSHEET_ID, range=range_name).execute()
-                    rows = result.get('values', [])
-                    for row in rows:
-                        if row:
-                            val = str(row[0]).strip()
-                            if val and val.lower() not in ['bda shortid', 'bda short id', 'supervisor short id']:
-                                valid_ids.add(val)
-                except Exception as e: print(f"Error reading {range_name}: {e}")
-        print(f"Loaded {len(valid_ids)} unique Sales Team IDs.")
+        # Querying the CSV directly via DuckDB
+        # We look for the columns corresponding to BDA ShortID or Supervisor Short ID
+        res = con.execute("""
+            SELECT "BDA ShortID", "Supervisor Short ID" 
+            FROM read_csv_auto('NSU_master.csv', all_varchar=true)
+        """).fetchall()
+        
+        for row in res:
+            for val in row:
+                if val and str(val).strip().lower() not in ['nan', 'none', '']:
+                    valid_ids.add(str(val).strip())
+                    
+        print(f"Loaded {len(valid_ids)} unique Sales Team IDs from CSV.")
         return valid_ids
     except Exception as e:
-        print(f"Failed to fetch Sales Team Sheets: {e}")
+        print(f"Failed to fetch Sales Team IDs from CSV: {e}")
         return set()
+
 
 def write_values_to_sheet(values):
     """Writes consolidated rows to Analysis_Results and updates Queue"""
@@ -220,6 +217,17 @@ if files:
             if download_file(item['id'], safe_name):
                 try: con.execute(f"CREATE OR REPLACE TABLE save_easy AS SELECT * FROM read_csv_auto('{safe_name}', union_by_name=true)"); has_save_easy = True
                 except: pass
+                    # --- C. LOAD MASTER FILES ---
+# ... (inside your file loop)
+        elif "NSU_master" in safe_name:
+            if download_file(item['id'], safe_name):
+                # No need to create a persistent table unless you want to, 
+                # but we'll download it here to ensure it exists for the helper.
+                print(f"Downloaded {safe_name}")
+
+# --- B. LOAD EXTERNAL DATA (Updated) ---
+# Call this AFTER the file download loop so NSU_master.csv exists locally
+sales_team_ids = get_sales_team_ids_from_csv(con)
         
         # 2. MONTHLY BEAT FILES (Logic to exclude special files first)
         elif not any(x in safe_name for x in ["Store_Guardrail", "SaveEasy", "Pan_india", "4RExtraction", "Memberwise_sales"]):
