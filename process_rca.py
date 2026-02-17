@@ -31,14 +31,6 @@ FOLDER_ID = "1pjsuzA9bmQdltnvf21vZ0U4bZ75fUyWt"
 RESULTS_TAB_NAME = "Analysis_Results"
 QUEUE_TAB_NAME = "Request_Queue"
 
-# CONFIG: NSU Sheets
-NSU_SPREADSHEET_ID = "1CHBcnNoVhW025l486C004VU7xHWgEQj6Xs7wkZXeelA"
-NSU_CONFIG = {
-    931173305: 'D',   # BDA ShortID
-    1119970190: 'M',  # BDA Short ID
-    899736083: 'G'    # Supervisor Short ID
-}
-
 # ==========================================
 # 2. HELPER FUNCTIONS
 # ==========================================
@@ -79,32 +71,40 @@ def download_file(file_id, output_path):
         print(f"Error downloading {file_id}: {e}")
         return False
 
-def get_sales_team_ids():
+def get_sales_team_ids_from_csv(con):
+    """
+    Reads NSU_master.csv to get valid Sales Team IDs.
+    Looks for 'BDA ShortID' or 'Supervisor Short ID'.
+    """
     valid_ids = set()
-    print(">>> Fetching Sales Team Data from Google Sheets...")
+    print(">>> Fetching Sales Team Data from NSU_master.csv...")
     try:
-        meta = sheets_service.spreadsheets().get(spreadsheetId=NSU_SPREADSHEET_ID).execute()
-        sheets_info = meta.get('sheets', [])
-        for sheet in sheets_info:
-            gid = sheet['properties']['sheetId']
-            title = sheet['properties']['title']
-            if gid in NSU_CONFIG:
-                col_letter = NSU_CONFIG[gid]
-                range_name = f"'{title}'!{col_letter}:{col_letter}"
-                try:
-                    result = sheets_service.spreadsheets().values().get(
-                        spreadsheetId=NSU_SPREADSHEET_ID, range=range_name).execute()
-                    rows = result.get('values', [])
-                    for row in rows:
-                        if row:
-                            val = str(row[0]).strip()
-                            if val and val.lower() not in ['bda shortid', 'bda short id', 'supervisor short id']:
-                                valid_ids.add(val)
-                except Exception as e: print(f"Error reading {range_name}: {e}")
+        # Check if file exists first
+        if not os.path.exists('NSU_master.csv'):
+            print("NSU_master.csv not found locally.")
+            return set()
+
+        # Read specific columns
+        query = """
+            SELECT "BDA ShortID", "Supervisor Short ID" 
+            FROM read_csv_auto('NSU_master.csv', union_by_name=true, all_varchar=true)
+        """
+        # Note: If columns don't exist exactly as named, DuckDB might error. 
+        # We assume the CSV headers match your prompt description.
+        try:
+            res = con.execute(query).fetchall()
+            for row in res:
+                for val in row:
+                    if val and str(val).strip().lower() not in ['nan', 'none', '']:
+                        valid_ids.add(str(val).strip())
+        except Exception as sql_err:
+            print(f"Column name mismatch in NSU_master.csv or read error: {sql_err}")
+            # Fallback: Read all columns and try to find IDs (optional, but skipping for now to keep it strict)
+            
         print(f"Loaded {len(valid_ids)} unique Sales Team IDs.")
         return valid_ids
     except Exception as e:
-        print(f"Failed to fetch Sales Team Sheets: {e}")
+        print(f"Failed to fetch Sales Team IDs from CSV: {e}")
         return set()
 
 def write_values_to_sheet(values):
@@ -175,13 +175,10 @@ if download_file(INPUT_FILE_ID, 'user_input.json'):
 else:
     con.execute("CREATE TABLE user_data (mem_nbr VARCHAR)")
 
-# --- B. LOAD EXTERNAL DATA ---
-sales_team_ids = get_sales_team_ids()
-
-# --- C. LOAD MASTER FILES ---
+# --- B. LOAD MASTER FILES FROM DRIVE ---
 all_master_files = [] 
 has_save_easy = False; has_store_guardrail = False; has_pan_india = False
-has_4r_extraction = False; has_member_sales = False
+has_4r_extraction = False; has_member_sales = False; has_member_dump = False
 
 try:
     results = drive_service.files().list(
@@ -192,8 +189,6 @@ except: files = []
 
 if files:
     print(f"Found {len(files)} CSV files. Loading...")
-    
-    # Track unique names to prevent duplicates from Drive
     seen_files = set()
 
     for item in files:
@@ -221,8 +216,20 @@ if files:
                 try: con.execute(f"CREATE OR REPLACE TABLE save_easy AS SELECT * FROM read_csv_auto('{safe_name}', union_by_name=true)"); has_save_easy = True
                 except: pass
         
-        # 2. MONTHLY BEAT FILES (Logic to exclude special files first)
-        elif not any(x in safe_name for x in ["Store_Guardrail", "SaveEasy", "Pan_india", "4RExtraction", "Memberwise_sales"]):
+        # 2. NEW: NSU MASTER & MEMBER DUMP
+        elif "NSU_master" in safe_name:
+            download_file(item['id'], 'NSU_master.csv') # Just download, will read via helper
+        
+        elif "Member_dump" in safe_name:
+            if download_file(item['id'], 'Member_dump.csv'):
+                try: 
+                    # Load Member Dump into table
+                    con.execute(f"CREATE OR REPLACE TABLE member_dump AS SELECT * FROM read_csv_auto('Member_dump.csv', all_varchar=true, union_by_name=true)")
+                    has_member_dump = True
+                except: pass
+        
+        # 3. MONTHLY BEAT FILES (Logic to exclude special files first)
+        elif not any(x in safe_name for x in ["Store_Guardrail", "SaveEasy", "Pan_india", "4RExtraction", "Memberwise_sales", "NSU_master", "Member_dump"]):
             if safe_name not in seen_files:
                 all_master_files.append(safe_name)
                 seen_files.add(safe_name)
@@ -233,9 +240,9 @@ if files:
     current_month_file = all_master_files[-1] if all_master_files else None
     print(f"Current Month File identified as: {current_month_file}")
 
-# ==========================================
-# 4. ANALYSIS & LOGIC
-# ==========================================
+# --- C. GET SALES TEAM IDS (Updated to read from CSV) ---
+sales_team_ids = get_sales_team_ids_from_csv(con)
+
 # ==========================================
 # 4. ANALYSIS & LOGIC
 # ==========================================
@@ -254,6 +261,8 @@ sql_query = """
       AND m.filename NOT LIKE '%Pan_india%'
       AND m.filename NOT LIKE '%4RExtraction%'
       AND m.filename NOT LIKE '%Memberwise_sales%'
+      AND m.filename NOT LIKE '%NSU_master%'
+      AND m.filename NOT LIKE '%Member_dump%'
 """
 
 final_rows_to_write = []
@@ -317,7 +326,7 @@ try:
                 raw_cat = get_col_value(curr_row, ['Sub Cat Name', 'Sub_Cat_Name', 'Sub Category', 'Sub_Category', 'sub_cat_name'])
                 if raw_cat: current_beat_sub_cat = str(raw_cat).strip().lower()
 
-        # B. NSU Check
+        # B. NSU Check (Logic uses 4R Extraction to find QC user, then checks if QC User is in sales_team_ids)
         flag_is_nsu = False; flag_nsu_sales_team = False 
         if has_4r_extraction:
             try:
@@ -326,6 +335,7 @@ try:
                 
                 if qc_res:
                     flag_is_nsu = True
+                    # Check against the Set loaded from NSU_master.csv
                     if str(qc_res[0]).strip() in sales_team_ids: flag_nsu_sales_team = True
             except: pass
 
@@ -375,11 +385,10 @@ try:
                     flag_zecm_active = True
             except: pass
             
-        # F.2 Walk-in (ZFP) Check [NEW LOGIC]
+        # F.2 Walk-in (ZFP) Check
         flag_zfp_active = False
         if has_member_sales:
             try:
-                # Check for positive sales in ZFP channel
                 zfp_res = con.execute(f"SELECT SUM(Current_Month + Month_Minus_1 + Month_Minus_2 + Month_Minus_3 + Month_Minus_4 + Month_Minus_5 + Month_Minus_6) FROM member_sales WHERE CAST(MEMBERSHIP_NBR AS VARCHAR) = '{mem_id_str}' AND CHANNEL_TYPE = 'ZFP'").fetchone()
                 if zfp_res and zfp_res[0] and zfp_res[0] > 0:
                     flag_zfp_active = True
@@ -453,7 +462,7 @@ try:
             final_display_rca = "Member is in Pan India list. Requires Store Manager approval."
             final_status = "🟡 ACTION REQUIRED"
             
-        # 5. Walk-in (ZFP) Logic [NEW]
+        # 5. Walk-in (ZFP) Logic
         elif flag_zfp_active:
              final_display_rca = "Walk-in member will be added to beat post store manager approval."
              final_status = "🟡 ACTION REQUIRED"
@@ -472,14 +481,45 @@ try:
                 final_display_rca = "New Sign Up (NSU) verified by Store Team. Requires Store Manager approval."
                 final_status = "🟡 ACTION REQUIRED"
 
-        # 8. Clean Case / Unknown
+        # 8. Clean Case / Unknown / Member Dump Check
         else:
             if latest_missing_month != "N/A":
                 final_display_rca = f"Returning Member (Last active: {latest_missing_month}). Approved for addition."
                 final_status = "🟢 AUTO-APPROVED"
             else:
-                final_display_rca = "Given member didn't meet any criteria. Please check if the member number is correct. If yes, try contacting the Sales team."
-                final_status = "🔴 REJECTED - NOT FOUND"
+                # --- NEW LOGIC FOR MEMBER DUMP ---
+                msg_sales = "Please contact sales team for further details"
+                msg_invalid = "Not a valid member please check the number and contact sales team for further details"
+                
+                is_in_dump = False
+                if has_member_dump:
+                    try:
+                        # Inspect Column B (Index 1) and Col G (Index 6)
+                        # We use duckdb to dynamically find valid column names if possible, 
+                        # but standard indexing is safer if header names vary.
+                        # DuckDB query to check if mem_id_str is in Col #2 or Col #7
+                        
+                        cols_info = con.execute("DESCRIBE member_dump").fetchall()
+                        if len(cols_info) >= 7:
+                            col_b_name = cols_info[1][0] # 2nd column
+                            col_g_name = cols_info[6][0] # 7th column
+                            
+                            check_q = f"""
+                                SELECT COUNT(*) FROM member_dump 
+                                WHERE CAST("{col_b_name}" AS VARCHAR) = '{mem_id_str}' 
+                                   OR CAST("{col_g_name}" AS VARCHAR) = '{mem_id_str}'
+                            """
+                            if con.execute(check_q).fetchone()[0] > 0:
+                                is_in_dump = True
+                    except Exception as e:
+                        print(f"Error checking Member Dump: {e}")
+
+                if is_in_dump:
+                    final_display_rca = msg_sales
+                    final_status = "🔴 REJECTED - CONTACT SALES"
+                else:
+                    final_display_rca = msg_invalid
+                    final_status = "🔴 REJECTED - INVALID ID"
 
         # --- WRITE ROW ---
         found_location_val = "Current Beat" if flag_in_current_beat else ("Historical Files" if len(found_files)>0 else "N/A")
