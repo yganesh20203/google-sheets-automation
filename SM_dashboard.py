@@ -2683,6 +2683,161 @@ def process_inventory_ageing(creds, file_path):
     else:
         print("No changes detected in Inventory Ageing metrics.")
 
+def update_saveeasy_renewals_metrics(creds):
+    """Fetches Saveeasy and Renewals MAC data and updates ONLY if changed."""
+    print(f"\n--- Processing Saveeasy & Renewals Metrics ---")
+    gc = gspread.authorize(creds)
+    
+    # 1. Open Source Sheet
+    source_sheet_id = '1WylO6gFmOtQvxDT9z0dt6c7izQ8Zig5u-Wj8UBfosug'
+    try:
+        source_doc = gc.open_by_key(source_sheet_id)
+    except Exception as e:
+        print(f"Failed to open Saveeasy/Renewals source sheet. Error: {e}")
+        return
+
+    # 2. Determine Dates & Dynamic Tab Names
+    ist_timezone = timezone(timedelta(hours=5, minutes=30))
+    yesterday = (datetime.now(ist_timezone) - timedelta(days=1)).date()
+    start_of_month = yesterday.replace(day=1)
+    
+    # Dynamically generate "Feb'26" or "Mar'26" based on yesterday's date
+    month_yr_prefix = f"{yesterday.strftime('%b')}'{yesterday.strftime('%y')}"
+    
+    # Configuration mapping Tab Names to Master Dashboard Metric Names
+    tabs_to_process = {
+        f"{month_yr_prefix} MTD SE Enrollments": "Saveeasy Enroll",
+        f"{month_yr_prefix} MTD SE Redemptions": "Saveeasy Redemption",
+        f"{month_yr_prefix} MTD Renewals Mac": "Renewals MAC"
+    }
+    
+    print(f"Metrics: FTD for {yesterday} | MTD from {start_of_month}")
+
+    # Reverse mapping: "amritsar" -> "4702"
+    # Make sure STORE_MAPPING is defined in your main script
+    REVERSE_STORE_MAPPING = {v.lower().strip(): k for k, v in STORE_MAPPING.items()}
+
+    def safe_float(val):
+        val_str = str(val).replace(',', '').strip()
+        if not val_str or val_str in ['-', 'NA', '#DIV/0!', '#N/A']: return 0.0
+        try:
+            return float(val_str)
+        except ValueError:
+            return 0.0
+
+    # Data structure: {StoreCode: {'Saveeasy Enroll': {'FTD': x, 'MTD': y}, ...}}
+    metrics_data = {}
+
+    # 3. Process Each Tab
+    for tab_name, metric_name in tabs_to_process.items():
+        print(f"Looking for tab: {tab_name}...")
+        try:
+            source_ws = source_doc.worksheet(tab_name)
+            source_data = source_ws.get_all_values()
+        except gspread.exceptions.WorksheetNotFound:
+            print(f"  -> Tab '{tab_name}' not found. Skipping.")
+            continue
+        except Exception as e:
+            print(f"  -> Error reading '{tab_name}': {e}")
+            continue
+
+        if len(source_data) < 2: continue
+
+        # A. Find Date Columns in Row 1 (Index 0)
+        header_row = source_data[0]
+        ftd_col_idx = -1
+        mtd_col_indices = []
+
+        for i, cell_val in enumerate(header_row):
+            val_str = str(cell_val).strip()
+            if not val_str: continue
+            
+            try:
+                # pandas is great at guessing formats like mm/dd/yyyy
+                col_date = pd.to_datetime(val_str, errors='coerce').date()
+                if pd.isna(col_date): continue
+                
+                if col_date == yesterday:
+                    ftd_col_idx = i
+                if start_of_month <= col_date <= yesterday:
+                    mtd_col_indices.append(i)
+            except Exception:
+                pass 
+
+        if ftd_col_idx == -1 and not mtd_col_indices:
+            print(f"  -> Could not find valid dates in '{tab_name}'.")
+            continue
+
+        # B. Extract Data from Rows
+        for row in source_data[1:]:
+            if len(row) < 1: continue
+            
+            store_name = str(row[0]).strip().lower() # Column A
+            
+            if store_name in REVERSE_STORE_MAPPING:
+                store_code = REVERSE_STORE_MAPPING[store_name]
+                
+                # FTD Value
+                ftd_val = 0.0
+                if ftd_col_idx != -1 and len(row) > ftd_col_idx:
+                    ftd_val = safe_float(row[ftd_col_idx])
+                
+                # MTD Value (Sum of all days up to yesterday)
+                mtd_val = sum([safe_float(row[i]) for i in mtd_col_indices if len(row) > i])
+                
+                if store_code not in metrics_data:
+                    metrics_data[store_code] = {}
+                    
+                metrics_data[store_code][metric_name] = {'FTD': ftd_val, 'MTD': mtd_val}
+
+    # 4. Update Target Master Sheet (With Change Detection)
+    print("Connecting to target Master Sheet...")
+    target_sheet_id = '1BTy6r3ep-NhUQ1iCFGM2VWqKXPysyfnoiTJdUZzzl34'
+    target_ws = gc.open_by_key(target_sheet_id).worksheet('Store_Data') 
+    target_data = target_ws.get_all_values()
+    
+    cells_to_update = []
+    current_time = datetime.now(ist_timezone).strftime("%d-%b-%Y %I:%M %p")
+    updates_count = 0
+    
+    valid_metrics = list(tabs_to_process.values())
+
+    for index, row in enumerate(target_data):
+        if len(row) >= 2: 
+            store_code = str(row[0]).strip() 
+            cell_type = str(row[1]).strip()
+            
+            if cell_type in valid_metrics and store_code in metrics_data:
+                
+                if cell_type in metrics_data[store_code]:
+                    
+                    # A. Get NEW values
+                    new_ftd = metrics_data[store_code][cell_type]['FTD']
+                    new_mtd = metrics_data[store_code][cell_type]['MTD']
+                    
+                    # B. Get OLD values
+                    try:
+                        old_ftd = float(str(row[2]).replace(',', '').strip() or 0)
+                    except: old_ftd = 0.0
+                    try:
+                        old_mtd = float(str(row[3]).replace(',', '').strip() or 0)
+                    except: old_mtd = 0.0
+                    
+                    # C. Compare (Change Detection)
+                    if abs(new_ftd - old_ftd) > 0.001 or abs(new_mtd - old_mtd) > 0.001:
+                        updates_count += 1
+                        
+                        cells_to_update.append(gspread.Cell(row=index+1, col=3, value=new_ftd))
+                        cells_to_update.append(gspread.Cell(row=index+1, col=4, value=new_mtd))
+                        cells_to_update.append(gspread.Cell(row=index+1, col=5, value=current_time))
+                
+    if cells_to_update:
+        print(f"Detected changes in {updates_count} rows. Updating Google Sheets...")
+        target_ws.update_cells(cells_to_update)
+        print("Saveeasy & Renewals Update complete!")
+    else:
+        print("No changes detected in Saveeasy & Renewals metrics.")
+
 
 def main():
     creds = authenticate_service_account()
@@ -2715,6 +2870,7 @@ def main():
     run_safely(update_vehicle_count_metric, creds, name="Vehicle Count Metric")
     run_safely(update_ninth_metric, creds, name="Adhoc Vehicle Metric")
     run_safely(update_veh_released_metric, creds, name="Veh Released <10am Metric")
+    run_safely(update_saveeasy_renewals_metrics, name = "Save Easy Metrics")
 
     # --- HELPER 2: Download, Process, and Clean Up Drive Files ---
     files_to_process = [
