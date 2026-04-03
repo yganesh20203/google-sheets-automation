@@ -245,11 +245,11 @@ def process_overall_instock(df):
 def process_lmtd_logic(df_lmtd, calc_date):
     """
     Calculates LMTD & LM Sales.
-    FILE: 2026_feb_sales.csv
-    HEADERS: Sales_Feb_01, Sales_Feb_02...
+    FILE: 2026_mar_sales.csv
+    HEADERS: Sales_Mar_01, Sales_Mar_02...
     """
     if df_lmtd is None: return None
-    log("    > Calculating LMTD & LM Sales from Feb 2026 data...")
+    log("    > Calculating LMTD & LM Sales from Mar 2026 data...")
     try:
         # Ensure Key Columns Exist
         if 'STORE_NBR' in df_lmtd.columns and 'ITEM_NUMBER' in df_lmtd.columns:
@@ -260,13 +260,13 @@ def process_lmtd_logic(df_lmtd, calc_date):
             log("    [ERROR] STORE_NBR or ITEM_NUMBER missing in LMTD file.")
             return None
 
-        # --- FIX: CHANGED 'Jan' TO 'Feb' ---
+        # --- FIX: CHANGED 'Feb' TO 'Mar' ---
         day_limit = calc_date.day 
         cols_lmtd = []
         
-        # 1. Calculate LMTD (1st to Current Day of Feb)
+        # 1. Calculate LMTD (1st to Current Day of Mar)
         for d in range(1, day_limit + 1):
-            col_name = f"Sales_Feb_{d:02d}"  # <--- UPDATED
+            col_name = f"Sales_Mar_{d:02d}"  # <--- UPDATED
             if col_name in df_lmtd.columns:
                 cols_lmtd.append(col_name)
         
@@ -275,8 +275,8 @@ def process_lmtd_logic(df_lmtd, calc_date):
         else:
             df_lmtd['LMTD Sales'] = df_lmtd[cols_lmtd].apply(pd.to_numeric, errors='coerce').sum(axis=1)
 
-        # 2. Calculate LM Sales (Total Feb Sales)
-        cols_lm = [c for c in df_lmtd.columns if c.startswith('Sales_Feb_')] # <--- UPDATED
+        # 2. Calculate LM Sales (Total Mar Sales)
+        cols_lm = [c for c in df_lmtd.columns if c.startswith('Sales_Mar_')] # <--- UPDATED
         if not cols_lm:
             df_lmtd['LM Sales'] = 0
         else:
@@ -291,11 +291,11 @@ def process_lmtd_logic(df_lmtd, calc_date):
 def process_lytd_logic(df_lytd, calc_date):
     """
     Calculates LYTD & LYM Sales.
-    FILE: 2025_mar_sales.csv
-    HEADERS: Sales_Mar_01, Sales_Mar_02...
+    FILE: 2025_apr_sales.csv
+    HEADERS: Sales_Apr_01, Sales_Apr_02...
     """
     if df_lytd is None: return None
-    log("    > Calculating LYTD & LYM Sales from Mar 2025 data...")
+    log("    > Calculating LYTD & LYM Sales from Apr 2025 data...")
     try:
         if 'STORE_NBR' in df_lytd.columns and 'ITEM_NUMBER' in df_lytd.columns:
             s_store = pd.to_numeric(df_lytd['STORE_NBR'], errors='coerce').fillna(0).astype('int64').astype(str)
@@ -305,13 +305,13 @@ def process_lytd_logic(df_lytd, calc_date):
             log("    [ERROR] STORE_NBR or ITEM_NUMBER missing in LYTD file.")
             return None
 
-        # --- FIX: CHANGED 'Feb' TO 'Mar' ---
+        # --- FIX: CHANGED 'Mar' TO 'Apr' ---
         day_limit = calc_date.day 
         cols_lytd = []
         
-        # 1. Calculate LYTD (1st to Current Day of Mar 2025)
+        # 1. Calculate LYTD (1st to Current Day of Apr 2025)
         for d in range(1, day_limit + 1):
-            col_name = f"Sales_Mar_{d:02d}" # <--- UPDATED
+            col_name = f"Sales_Apr_{d:02d}" # <--- UPDATED
             if col_name in df_lytd.columns:
                 cols_lytd.append(col_name)
         
@@ -320,8 +320,8 @@ def process_lytd_logic(df_lytd, calc_date):
         else:
             df_lytd['LYTD Sales'] = df_lytd[cols_lytd].apply(pd.to_numeric, errors='coerce').sum(axis=1)
 
-        # 2. Calculate LYM Sales (Total Mar 2025 Sales)
-        cols_lym = [c for c in df_lytd.columns if c.startswith('Sales_Mar_')] # <--- UPDATED
+        # 2. Calculate LYM Sales (Total Apr 2025 Sales)
+        cols_lym = [c for c in df_lytd.columns if c.startswith('Sales_Apr_')] # <--- UPDATED
         if not cols_lym:
             df_lytd['LYM Sales'] = 0
         else:
@@ -843,8 +843,8 @@ def check_and_copy_files(drive_service):
     df_ytd = download_csv_to_df(drive_service, 'ytd_sales.csv', TARGET_FOLDER_ID)
     
     # --- UPDATED FILE NAMES FOR MARCH ---
-    df_lmtd_raw = download_csv_to_df(drive_service, '2026_feb_sales.csv', TARGET_FOLDER_ID)
-    df_lytd_raw = download_csv_to_df(drive_service, '2025_mar_sales.csv', TARGET_FOLDER_ID)
+    df_lmtd_raw = download_csv_to_df(drive_service, '2026_mar_sales.csv', TARGET_FOLDER_ID)
+    df_lytd_raw = download_csv_to_df(drive_service, '2025_apr_sales.csv', TARGET_FOLDER_ID)
 
     # 2. Date Fallback Logic
     log("\n--- Phase 2: Locating Source Files ---")
